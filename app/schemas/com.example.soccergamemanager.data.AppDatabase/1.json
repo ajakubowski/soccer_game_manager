@@ -1,0 +1,528 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "12d715afc805a62d9b36f5643caa1e4b",
+    "entities": [
+      {
+        "tableName": "seasons",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`seasonId` TEXT NOT NULL, `name` TEXT NOT NULL, `year` INTEGER NOT NULL, `defaultTemplateJson` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`seasonId`))",
+        "fields": [
+          {
+            "fieldPath": "seasonId",
+            "columnName": "seasonId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "year",
+            "columnName": "year",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "defaultTemplateJson",
+            "columnName": "defaultTemplateJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "seasonId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "players",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`playerId` TEXT NOT NULL, `seasonId` TEXT NOT NULL, `name` TEXT NOT NULL, `jerseyNumber` TEXT NOT NULL, `notes` TEXT NOT NULL, `preferredKeeper` INTEGER NOT NULL, `active` INTEGER NOT NULL, PRIMARY KEY(`playerId`), FOREIGN KEY(`seasonId`) REFERENCES `seasons`(`seasonId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "playerId",
+            "columnName": "playerId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seasonId",
+            "columnName": "seasonId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "jerseyNumber",
+            "columnName": "jerseyNumber",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "preferredKeeper",
+            "columnName": "preferredKeeper",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "active",
+            "columnName": "active",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "playerId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_players_seasonId",
+            "unique": false,
+            "columnNames": [
+              "seasonId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_players_seasonId` ON `${TABLE_NAME}` (`seasonId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "seasons",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "seasonId"
+            ],
+            "referencedColumns": [
+              "seasonId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "games",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`gameId` TEXT NOT NULL, `seasonId` TEXT NOT NULL, `opponent` TEXT NOT NULL, `location` TEXT NOT NULL, `scheduledAt` INTEGER NOT NULL, `status` TEXT NOT NULL, `templateJson` TEXT NOT NULL, `plannerNotes` TEXT NOT NULL, `currentHalf` INTEGER NOT NULL, `currentRound` INTEGER NOT NULL, `elapsedSecondsInHalf` INTEGER NOT NULL, `lockedAt` INTEGER, `finalizedAt` INTEGER, PRIMARY KEY(`gameId`), FOREIGN KEY(`seasonId`) REFERENCES `seasons`(`seasonId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "gameId",
+            "columnName": "gameId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seasonId",
+            "columnName": "seasonId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "opponent",
+            "columnName": "opponent",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "location",
+            "columnName": "location",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scheduledAt",
+            "columnName": "scheduledAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "templateJson",
+            "columnName": "templateJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "plannerNotes",
+            "columnName": "plannerNotes",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentHalf",
+            "columnName": "currentHalf",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentRound",
+            "columnName": "currentRound",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elapsedSecondsInHalf",
+            "columnName": "elapsedSecondsInHalf",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lockedAt",
+            "columnName": "lockedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "finalizedAt",
+            "columnName": "finalizedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "gameId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_games_seasonId",
+            "unique": false,
+            "columnNames": [
+              "seasonId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_games_seasonId` ON `${TABLE_NAME}` (`seasonId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "seasons",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "seasonId"
+            ],
+            "referencedColumns": [
+              "seasonId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "player_availability",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`gameId` TEXT NOT NULL, `playerId` TEXT NOT NULL, `isAvailable` INTEGER NOT NULL, PRIMARY KEY(`gameId`, `playerId`), FOREIGN KEY(`gameId`) REFERENCES `games`(`gameId`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`playerId`) REFERENCES `players`(`playerId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "gameId",
+            "columnName": "gameId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "playerId",
+            "columnName": "playerId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isAvailable",
+            "columnName": "isAvailable",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "gameId",
+            "playerId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_player_availability_playerId",
+            "unique": false,
+            "columnNames": [
+              "playerId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_player_availability_playerId` ON `${TABLE_NAME}` (`playerId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "games",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "gameId"
+            ],
+            "referencedColumns": [
+              "gameId"
+            ]
+          },
+          {
+            "table": "players",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "playerId"
+            ],
+            "referencedColumns": [
+              "playerId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "assignments",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`assignmentId` TEXT NOT NULL, `gameId` TEXT NOT NULL, `playerId` TEXT NOT NULL, `halfNumber` INTEGER NOT NULL, `roundIndex` INTEGER NOT NULL, `position` TEXT NOT NULL, `positionGroup` TEXT NOT NULL, PRIMARY KEY(`assignmentId`), FOREIGN KEY(`gameId`) REFERENCES `games`(`gameId`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`playerId`) REFERENCES `players`(`playerId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "assignmentId",
+            "columnName": "assignmentId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gameId",
+            "columnName": "gameId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "playerId",
+            "columnName": "playerId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "halfNumber",
+            "columnName": "halfNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "roundIndex",
+            "columnName": "roundIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "position",
+            "columnName": "position",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "positionGroup",
+            "columnName": "positionGroup",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "assignmentId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_assignments_gameId",
+            "unique": false,
+            "columnNames": [
+              "gameId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_assignments_gameId` ON `${TABLE_NAME}` (`gameId`)"
+          },
+          {
+            "name": "index_assignments_playerId",
+            "unique": false,
+            "columnNames": [
+              "playerId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_assignments_playerId` ON `${TABLE_NAME}` (`playerId`)"
+          },
+          {
+            "name": "index_assignments_halfNumber",
+            "unique": false,
+            "columnNames": [
+              "halfNumber"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_assignments_halfNumber` ON `${TABLE_NAME}` (`halfNumber`)"
+          },
+          {
+            "name": "index_assignments_roundIndex",
+            "unique": false,
+            "columnNames": [
+              "roundIndex"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_assignments_roundIndex` ON `${TABLE_NAME}` (`roundIndex`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "games",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "gameId"
+            ],
+            "referencedColumns": [
+              "gameId"
+            ]
+          },
+          {
+            "table": "players",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "playerId"
+            ],
+            "referencedColumns": [
+              "playerId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "goal_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`goalEventId` TEXT NOT NULL, `gameId` TEXT NOT NULL, `scoredBy` TEXT NOT NULL, `halfNumber` INTEGER NOT NULL, `roundIndex` INTEGER NOT NULL, `elapsedSecondsInHalf` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`goalEventId`), FOREIGN KEY(`gameId`) REFERENCES `games`(`gameId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "goalEventId",
+            "columnName": "goalEventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gameId",
+            "columnName": "gameId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scoredBy",
+            "columnName": "scoredBy",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "halfNumber",
+            "columnName": "halfNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "roundIndex",
+            "columnName": "roundIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elapsedSecondsInHalf",
+            "columnName": "elapsedSecondsInHalf",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "goalEventId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_goal_events_gameId",
+            "unique": false,
+            "columnNames": [
+              "gameId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_goal_events_gameId` ON `${TABLE_NAME}` (`gameId`)"
+          },
+          {
+            "name": "index_goal_events_halfNumber",
+            "unique": false,
+            "columnNames": [
+              "halfNumber"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_goal_events_halfNumber` ON `${TABLE_NAME}` (`halfNumber`)"
+          },
+          {
+            "name": "index_goal_events_roundIndex",
+            "unique": false,
+            "columnNames": [
+              "roundIndex"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_goal_events_roundIndex` ON `${TABLE_NAME}` (`roundIndex`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "games",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "gameId"
+            ],
+            "referencedColumns": [
+              "gameId"
+            ]
+          }
+        ]
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '12d715afc805a62d9b36f5643caa1e4b')"
+    ]
+  }
+}
