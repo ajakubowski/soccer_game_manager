@@ -2,7 +2,9 @@
 .idea/
 build/
 app/build/
+app/release/
 local.properties
 captures/
 *.iml
 *.log
+.DS_Store
