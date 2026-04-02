@@ -4,6 +4,7 @@ import com.example.soccergamemanager.domain.FieldPosition
 import com.example.soccergamemanager.domain.GameTemplateConfig
 import com.example.soccergamemanager.domain.LineupGenerator
 import com.example.soccergamemanager.domain.LineupPlayer
+import com.example.soccergamemanager.domain.ManualGroupLock
 import com.example.soccergamemanager.domain.PositionGroup
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -92,6 +93,36 @@ class LineupGeneratorTest {
         val template = GameTemplateConfig(halfDurationMinutes = 25, substitutionWindowMinutes = 5)
 
         assertEquals(6, template.roundsPerHalf)
+    }
+
+    @Test
+    fun respects_manual_goalie_locks_by_half() {
+        val players = (1..11).map { index ->
+            LineupPlayer(
+                id = "p$index",
+                name = "Player $index",
+                preferredKeeper = index <= 2,
+            )
+        }
+
+        val result = generator.generate(
+            template = GameTemplateConfig.defaultU9(),
+            players = players,
+            historyByPlayer = emptyMap(),
+            manualGroupLocks = listOf(
+                ManualGroupLock(halfNumber = 1, positionGroup = PositionGroup.GOALIE, playerIds = listOf("p4")),
+                ManualGroupLock(halfNumber = 2, positionGroup = PositionGroup.GOALIE, playerIds = listOf("p5")),
+            ),
+        )
+
+        assertEquals(
+            setOf("p4"),
+            result.assignments.filter { it.halfNumber == 1 && it.position == FieldPosition.GOALIE }.map { it.playerId }.toSet(),
+        )
+        assertEquals(
+            setOf("p5"),
+            result.assignments.filter { it.halfNumber == 2 && it.position == FieldPosition.GOALIE }.map { it.playerId }.toSet(),
+        )
     }
 
     @Test

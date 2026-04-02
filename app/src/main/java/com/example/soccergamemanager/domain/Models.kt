@@ -80,6 +80,13 @@ data class PlayerSeasonHistory(
     val positionCounts: Map<FieldPosition, Int> = emptyMap(),
 )
 
+@Serializable
+data class ManualGroupLock(
+    val halfNumber: Int,
+    val positionGroup: PositionGroup,
+    val playerIds: List<String> = emptyList(),
+)
+
 data class GeneratedAssignment(
     val halfNumber: Int,
     val roundIndex: Int,
@@ -97,10 +104,21 @@ data class PlayerMetrics(
     val playerId: String,
     val playerName: String,
     val totalMinutes: Double,
+    val totalGoalsScored: Int,
+    val totalAssists: Int,
     val keeperCount: Int,
     val groupCounts: Map<PositionGroup, Int>,
     val positionCounts: Map<FieldPosition, Int>,
     val scoreDifferentialWhileAssigned: Int,
+    val positionStats: Map<FieldPosition, PositionStatMetrics>,
+)
+
+data class PositionStatMetrics(
+    val halvesPlayed: Int = 0,
+    val minutesPlayed: Double = 0.0,
+    val goalsScored: Int = 0,
+    val assists: Int = 0,
+    val scoreDifferential: Int = 0,
 )
 
 data class TeamMetrics(

@@ -16,9 +16,13 @@ class SettingsStore(private val context: Context) {
         preferences[selectedSeasonKey]
     }
 
-    suspend fun setSelectedSeasonId(seasonId: String) {
+    suspend fun setSelectedSeasonId(seasonId: String?) {
         context.dataStore.edit { preferences ->
-            preferences[selectedSeasonKey] = seasonId
+            if (seasonId == null) {
+                preferences.remove(selectedSeasonKey)
+            } else {
+                preferences[selectedSeasonKey] = seasonId
+            }
         }
     }
 }

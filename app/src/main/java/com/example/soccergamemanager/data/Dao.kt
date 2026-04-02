@@ -1,6 +1,7 @@
 package com.example.soccergamemanager.data
 
 import androidx.room.Dao
+import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -23,6 +24,9 @@ interface SeasonDao {
 
     @Update
     suspend fun updateSeason(season: SeasonEntity)
+
+    @Delete
+    suspend fun deleteSeason(season: SeasonEntity)
 }
 
 @Dao

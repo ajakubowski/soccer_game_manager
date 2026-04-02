@@ -1,5 +1,7 @@
 package com.example.soccergamemanager.ui
 
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.content.res.Configuration
 import android.media.AudioManager
 import android.media.ToneGenerator
@@ -18,6 +20,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -87,9 +91,12 @@ import androidx.navigation.compose.rememberNavController
 import com.example.soccergamemanager.R
 import com.example.soccergamemanager.data.AssignmentEntity
 import com.example.soccergamemanager.data.GameDetail
+import com.example.soccergamemanager.data.GameEntity
 import com.example.soccergamemanager.data.GoalEventEntity
 import com.example.soccergamemanager.data.PlayerAvailabilityEntity
 import com.example.soccergamemanager.data.PlayerEntity
+import com.example.soccergamemanager.data.SeasonEntity
+import com.example.soccergamemanager.data.manualGroupLocks
 import com.example.soccergamemanager.data.template
 import com.example.soccergamemanager.domain.FieldPosition
 import com.example.soccergamemanager.domain.GameStatus
@@ -100,6 +107,7 @@ import com.example.soccergamemanager.ui.theme.IceWhite
 import com.example.soccergamemanager.ui.theme.McFarlandBlue
 import com.example.soccergamemanager.ui.theme.McFarlandBlueDark
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
@@ -113,7 +121,7 @@ private enum class Destination(
     Games("games", "Games", Icons.Outlined.Event),
     Planner("planner", "Planner", Icons.Outlined.Tune),
     Live("live", "Live", Icons.Outlined.Timer),
-    History("history", "History", Icons.Outlined.BarChart),
+    History("history", "History & Stats", Icons.Outlined.BarChart),
     Reports("reports", "Reports", Icons.Outlined.Print),
 }
 
@@ -142,12 +150,13 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                     NavigationBarItem(
                         selected = currentRoute == destination.route,
                         onClick = {
-                            navController.navigate(destination.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+                            if (currentRoute != destination.route) {
+                                navController.navigate(destination.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        inclusive = false
+                                    }
+                                    launchSingleTop = true
                                 }
-                                launchSingleTop = true
-                                restoreState = true
                             }
                         },
                         colors = NavigationBarItemDefaults.colors(
@@ -187,6 +196,8 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                     uiState = uiState,
                     onCreateSeason = viewModel::createSeason,
                     onSelectSeason = viewModel::selectSeason,
+                    onUpdateSeason = viewModel::updateSeason,
+                    onDeleteSeason = viewModel::deleteSeason,
                     onAddPlayer = viewModel::addPlayer,
                     onUpdateSeasonDefaults = viewModel::updateSeasonDefaults,
                     onUpdatePlayer = viewModel::updatePlayerDetails,
@@ -194,24 +205,26 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                 )
             }
                 composable(Destination.Games.route) {
-                    GamesScreen(
-                        uiState = uiState,
-                        onCreateGame = viewModel::createGame,
-                        onSelectGame = { gameId, destination ->
-                            viewModel.selectGame(gameId)
-                            navController.navigate(destination.route)
+                GamesScreen(
+                    uiState = uiState,
+                    onCreateGame = viewModel::createGame,
+                    onUpdateGame = viewModel::updateGameDetails,
+                    onSelectGame = { gameId, destination ->
+                        viewModel.selectGame(gameId)
+                        navController.navigate(destination.route)
                         },
                     )
                 }
                 composable(Destination.Planner.route) {
-                    PlannerScreen(
-                        uiState = uiState,
-                        onSelectGame = viewModel::selectGame,
-                        onToggleAvailability = viewModel::toggleAvailability,
-                        onGenerateAssignments = viewModel::generateAssignments,
-                        onCycleAssignment = viewModel::cycleAssignmentPlayer,
-                    )
-                }
+                PlannerScreen(
+                    uiState = uiState,
+                    onSelectGame = viewModel::selectGame,
+                    onToggleAvailability = viewModel::toggleAvailability,
+                    onGenerateAssignments = viewModel::generateAssignments,
+                    onUpdateManualGroupLock = viewModel::updateManualGroupLock,
+                    onSetAssignmentPlayer = viewModel::setAssignmentPlayer,
+                )
+            }
                 composable(Destination.Live.route) {
                     LiveScreen(
                         uiState = uiState,
@@ -248,23 +261,27 @@ private fun SetupScreen(
     uiState: AppUiState,
     onCreateSeason: (String, String) -> Unit,
     onSelectSeason: (String) -> Unit,
+    onUpdateSeason: (SeasonEntity, String, String) -> Unit,
+    onDeleteSeason: (SeasonEntity) -> Unit,
     onAddPlayer: (String, String, Boolean) -> Unit,
-    onUpdateSeasonDefaults: (String, String, String) -> Unit,
+    onUpdateSeasonDefaults: (String, String) -> Unit,
     onUpdatePlayer: (PlayerEntity, String, String, Boolean, String) -> Unit,
     onTogglePlayerActive: (PlayerEntity) -> Unit,
 ) {
     val selectedTemplate = uiState.selectedSeason?.template()
-    var seasonName by rememberSaveable { mutableStateOf("Spring Team") }
-    var seasonYear by rememberSaveable {
-        mutableStateOf(Date().toInstant().atZone(ZoneId.systemDefault()).year.toString())
+    var teamProfileName by rememberSaveable(uiState.selectedSeasonId, uiState.selectedSeason?.name) {
+        mutableStateOf(uiState.selectedSeason?.name ?: "McFarland SC")
+    }
+    var teamYear by rememberSaveable(uiState.selectedSeasonId, uiState.selectedSeason?.year) {
+        mutableStateOf(
+            uiState.selectedSeason?.year?.toString()
+                ?: Date().toInstant().atZone(ZoneId.systemDefault()).year.toString(),
+        )
     }
     var playerName by rememberSaveable { mutableStateOf("") }
     var jerseyNumber by rememberSaveable { mutableStateOf("") }
     var preferredKeeper by rememberSaveable { mutableStateOf(false) }
     var editingPlayerId by rememberSaveable(uiState.selectedSeasonId) { mutableStateOf<String?>(null) }
-    var teamName by rememberSaveable(uiState.selectedSeasonId) {
-        mutableStateOf(uiState.selectedSeason?.name ?: "McFarland SC")
-    }
     var halfDurationMinutes by rememberSaveable(uiState.selectedSeasonId) {
         mutableStateOf(selectedTemplate?.halfDurationMinutes?.toString() ?: "25")
     }
@@ -339,39 +356,59 @@ private fun SetupScreen(
     ) {
         item {
             ScreenHeader(
-                title = "Season & Roster Setup",
-                subtitle = "Create the season, keep the roster current, and set your default clocks.",
+                title = "Team & Roster Setup",
+                subtitle = "Manage the team, roster, and default game settings.",
             )
         }
         item {
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Seasons", style = MaterialTheme.typography.titleLarge)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        uiState.seasons.forEach { season ->
-                            FilterChip(
-                                selected = season.seasonId == uiState.selectedSeasonId,
-                                onClick = { onSelectSeason(season.seasonId) },
-                                label = { Text("${season.name} ${season.year}") },
-                            )
+                    Text("Team profile", style = MaterialTheme.typography.titleLarge)
+                    if (uiState.seasons.size > 1) {
+                        Text("Active team")
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            uiState.seasons.forEach { season ->
+                                FilterChip(
+                                    selected = season.seasonId == uiState.selectedSeasonId,
+                                    onClick = { onSelectSeason(season.seasonId) },
+                                    label = { Text("${season.name} ${season.year}") },
+                                )
+                            }
                         }
                     }
-                    HorizontalDivider()
                     OutlinedTextField(
-                        value = seasonName,
-                        onValueChange = { seasonName = it },
-                        label = { Text("Season name") },
+                        value = teamProfileName,
+                        onValueChange = { teamProfileName = it },
+                        label = { Text("Team name") },
                         modifier = Modifier.fillMaxWidth(),
                     )
                     OutlinedTextField(
-                        value = seasonYear,
-                        onValueChange = { seasonYear = it },
+                        value = teamYear,
+                        onValueChange = { teamYear = it },
                         label = { Text("Year") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Button(onClick = { onCreateSeason(seasonName, seasonYear) }) {
-                        Text("Create season")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                uiState.selectedSeason?.let { team ->
+                                    onUpdateSeason(team, teamProfileName, teamYear)
+                                }
+                            },
+                            enabled = uiState.selectedSeason != null,
+                        ) {
+                            Text("Save team")
+                        }
+                        OutlinedButton(onClick = { onCreateSeason(teamProfileName, teamYear) }) {
+                            Text("New team")
+                        }
+                        TextButton(
+                            onClick = { uiState.selectedSeason?.let(onDeleteSeason) },
+                            enabled = uiState.selectedSeason != null,
+                        ) {
+                            Text("Delete team")
+                        }
                     }
                 }
             }
@@ -380,12 +417,6 @@ private fun SetupScreen(
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Game defaults", style = MaterialTheme.typography.titleLarge)
-                    OutlinedTextField(
-                        value = teamName,
-                        onValueChange = { teamName = it },
-                        label = { Text("Team name") },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
                     OutlinedTextField(
                         value = halfDurationMinutes,
                         onValueChange = { halfDurationMinutes = it },
@@ -405,7 +436,7 @@ private fun SetupScreen(
                         color = MaterialTheme.colorScheme.primary,
                     )
                     Button(
-                        onClick = { onUpdateSeasonDefaults(teamName, halfDurationMinutes, substitutionWindowMinutes) },
+                        onClick = { onUpdateSeasonDefaults(halfDurationMinutes, substitutionWindowMinutes) },
                         enabled = uiState.selectedSeasonId != null,
                     ) {
                         Text("Save defaults")
@@ -491,11 +522,63 @@ private fun SetupScreen(
 @Composable
 private fun GamesScreen(
     uiState: AppUiState,
-    onCreateGame: (String, String) -> Unit,
+    onCreateGame: (String, String, Long) -> Unit,
+    onUpdateGame: (GameEntity, String, String, Long) -> Unit,
     onSelectGame: (String, Destination) -> Unit,
 ) {
+    val context = LocalContext.current
     var opponent by rememberSaveable { mutableStateOf("") }
     var location by rememberSaveable { mutableStateOf("") }
+    var scheduledAtMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
+    var editingGameId by rememberSaveable { mutableStateOf<String?>(null) }
+    val editingGame = uiState.games.firstOrNull { it.gameId == editingGameId }
+
+    editingGame?.let { game ->
+        var editOpponent by rememberSaveable(game.gameId) { mutableStateOf(game.opponent) }
+        var editLocation by rememberSaveable(game.gameId) { mutableStateOf(game.location) }
+        var editScheduledAtMillis by rememberSaveable(game.gameId) { mutableStateOf(game.scheduledAt) }
+
+        AlertDialog(
+            onDismissRequest = { editingGameId = null },
+            title = { Text("Edit game") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = editOpponent,
+                        onValueChange = { editOpponent = it },
+                        label = { Text("Opponent") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = editLocation,
+                        onValueChange = { editLocation = it },
+                        label = { Text("Location") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    GameDateTimePicker(
+                        scheduledAtMillis = editScheduledAtMillis,
+                        onScheduledAtChange = { editScheduledAtMillis = it },
+                        context = context,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onUpdateGame(game, editOpponent, editLocation, editScheduledAtMillis)
+                        editingGameId = null
+                    },
+                ) {
+                    Text("Save game")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingGameId = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -524,11 +607,17 @@ private fun GamesScreen(
                         label = { Text("Location") },
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    GameDateTimePicker(
+                        scheduledAtMillis = scheduledAtMillis,
+                        onScheduledAtChange = { scheduledAtMillis = it },
+                        context = context,
+                    )
                     Button(
                         onClick = {
-                            onCreateGame(opponent, location)
+                            onCreateGame(opponent, location, scheduledAtMillis)
                             opponent = ""
                             location = ""
+                            scheduledAtMillis = System.currentTimeMillis()
                         },
                         enabled = uiState.selectedSeasonId != null,
                     ) {
@@ -543,6 +632,12 @@ private fun GamesScreen(
                     Text(game.opponent, style = MaterialTheme.typography.titleLarge)
                     Text("${formatDate(game.scheduledAt)} • ${game.location.ifBlank { "Location TBD" }}")
                     Text("Status: ${game.status.name}")
+                    TextButton(
+                        onClick = { editingGameId = game.gameId },
+                        modifier = Modifier.align(Alignment.End),
+                    ) {
+                        Text("Edit game")
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ElevatedAssistChip(
                             onClick = { onSelectGame(game.gameId, Destination.Planner) },
@@ -573,13 +668,128 @@ private fun PlannerScreen(
     onSelectGame: (String) -> Unit,
     onToggleAvailability: (String, Boolean) -> Unit,
     onGenerateAssignments: () -> Unit,
-    onCycleAssignment: (String) -> Unit,
+    onUpdateManualGroupLock: (Int, PositionGroup, List<String>) -> Unit,
+    onSetAssignmentPlayer: (String, String) -> Unit,
 ) {
     val detail = uiState.selectedGameDetail ?: run {
         EmptyState("Select a game from the Games tab to plan lineups.")
         return
     }
     val availabilityMap = detail.availability.associateBy({ it.playerId }, { it.isAvailable })
+    val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
+    val availablePlayers = detail.players
+        .filter { it.active && availabilityMap[it.playerId] != false }
+        .sortedBy { it.name }
+    val manualLocksByHalfGroup = detail.game.manualGroupLocks()
+        .associateBy({ it.halfNumber to it.positionGroup }, { it.playerIds })
+    var editingLockKey by rememberSaveable(detail.game.gameId) {
+        mutableStateOf<Pair<Int, PositionGroup>?>(null)
+    }
+    var editingAssignmentId by rememberSaveable(detail.game.gameId) {
+        mutableStateOf<String?>(null)
+    }
+
+    editingLockKey?.let { (halfNumber, group) ->
+        val existingSelection = manualLocksByHalfGroup[halfNumber to group].orEmpty()
+        var selectedIds by rememberSaveable(detail.game.gameId, halfNumber, group.name) {
+            mutableStateOf(existingSelection)
+        }
+
+        AlertDialog(
+            onDismissRequest = { editingLockKey = null },
+            title = { Text("Half $halfNumber ${group.label} lock") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (group == PositionGroup.GOALIE) {
+                            "Choose one player to lock into goalie for this half."
+                        } else {
+                            "Choose players to keep in ${group.label} for this half before autofill."
+                        },
+                    )
+                    availablePlayers.forEach { player ->
+                        FilterChip(
+                            selected = player.playerId in selectedIds,
+                            onClick = {
+                                selectedIds = if (group == PositionGroup.GOALIE) {
+                                    if (player.playerId in selectedIds) emptyList() else listOf(player.playerId)
+                                } else if (player.playerId in selectedIds) {
+                                    selectedIds - player.playerId
+                                } else {
+                                    selectedIds + player.playerId
+                                }
+                            },
+                            label = { Text(player.name) },
+                        )
+                    }
+                    if (selectedIds.isNotEmpty()) {
+                        TextButton(onClick = { selectedIds = emptyList() }) {
+                            Text("Clear lock")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onUpdateManualGroupLock(halfNumber, group, selectedIds)
+                        editingLockKey = null
+                    },
+                ) {
+                    Text("Save lock")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingLockKey = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
+    editingAssignmentId?.let { assignmentId ->
+        val assignment = detail.assignments.firstOrNull { it.assignmentId == assignmentId }
+        if (assignment != null) {
+            val sameRoundAssignments = detail.assignments.filter {
+                it.halfNumber == assignment.halfNumber && it.roundIndex == assignment.roundIndex
+            }
+            AlertDialog(
+                onDismissRequest = { editingAssignmentId = null },
+                title = { Text("Set ${assignment.position.label}") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Pick a player for half ${assignment.halfNumber}, round ${assignment.roundIndex}.")
+                        Text("If the player is already on the field this round, the app will swap the two positions.")
+                        availablePlayers.forEach { player ->
+                            val onFieldThisRound = sameRoundAssignments.any { it.playerId == player.playerId }
+                            OutlinedButton(
+                                onClick = {
+                                    onSetAssignmentPlayer(assignment.assignmentId, player.playerId)
+                                    editingAssignmentId = null
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                val currentLabel = if (player.playerId == assignment.playerId) {
+                                    " (current)"
+                                } else if (onFieldThisRound) {
+                                    " (swap)"
+                                } else {
+                                    ""
+                                }
+                                Text("${player.name}$currentLabel")
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { editingAssignmentId = null }) {
+                        Text("Close")
+                    }
+                },
+            )
+        }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -622,6 +832,14 @@ private fun PlannerScreen(
                 }
             }
         }
+        items((1..detail.game.template().halfCount).toList(), key = { "locks-$it" }) { halfNumber ->
+            ManualLocksCard(
+                halfNumber = halfNumber,
+                playerLookup = playerLookup,
+                locksByGroup = manualLocksByHalfGroup,
+                onEditGroup = { group -> editingLockKey = halfNumber to group },
+            )
+        }
         if (detail.assignments.isEmpty()) {
             item { EmptyState("Generate the lineup to see half groups and round-by-round assignments.") }
         } else {
@@ -629,7 +847,12 @@ private fun PlannerScreen(
                 item { HalfSummaryCard(detail, halfNumber) }
                 item { Text("Half $halfNumber rounds", style = MaterialTheme.typography.titleLarge) }
                 items((1..detail.game.template().roundsPerHalf).toList(), key = { "$halfNumber-$it" }) { roundNumber ->
-                    RoundCard(detail, halfNumber, roundNumber, onCycleAssignment)
+                    RoundCard(
+                        detail = detail,
+                        halfNumber = halfNumber,
+                        roundNumber = roundNumber,
+                        onOpenAssignment = { editingAssignmentId = it.assignmentId },
+                    )
                 }
             }
         }
@@ -642,10 +865,10 @@ private fun LiveScreen(
     onStartOrPause: () -> Unit,
     onAdvanceRound: () -> Unit,
     onAdvanceHalf: (Set<String>) -> Unit,
-    onRecordGoal: (GoalSide, String?) -> Unit,
+    onRecordGoal: (GoalSide, String?, String?) -> Unit,
     onApplyLiveSub: (String, String) -> Unit,
     onApplyInjurySub: (String, String) -> Unit,
-    onClearPlayerInjury: (String) -> Unit,
+    onClearPlayerInjury: (String, Boolean) -> Unit,
     onFinalize: () -> Unit,
 ) {
     val detail = uiState.selectedGameDetail ?: run {
@@ -682,6 +905,12 @@ private fun LiveScreen(
     val advanceHalfReady = gameRemainingSeconds <= 0
     var showScorerDialog by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
         mutableStateOf(false)
+    }
+    var showAssistDialog by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
+        mutableStateOf(false)
+    }
+    var pendingScorerId by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
+        mutableStateOf<String?>(null)
     }
     var scorerShowAll by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
         mutableStateOf(false)
@@ -751,8 +980,9 @@ private fun LiveScreen(
                     scorerChoices.forEach { player ->
                         OutlinedButton(
                             onClick = {
-                                onRecordGoal(GoalSide.TEAM, player.playerId)
+                                pendingScorerId = player.playerId
                                 showScorerDialog = false
+                                showAssistDialog = true
                                 scorerShowAll = false
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -762,7 +992,9 @@ private fun LiveScreen(
                     }
                     TextButton(
                         onClick = {
-                            onRecordGoal(GoalSide.TEAM, null)
+                            onRecordGoal(GoalSide.TEAM, null, null)
+                            pendingScorerId = null
+                            showAssistDialog = false
                             showScorerDialog = false
                             scorerShowAll = false
                         },
@@ -773,7 +1005,59 @@ private fun LiveScreen(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { showScorerDialog = false }) {
+                TextButton(onClick = {
+                    showScorerDialog = false
+                    pendingScorerId = null
+                    scorerShowAll = false
+                }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
+    if (showAssistDialog) {
+        val assistChoices = currentAssignments
+            .filter { it.playerId != pendingScorerId }
+            .mapNotNull { assignment -> activeRoster.firstOrNull { it.playerId == assignment.playerId } }
+        AlertDialog(
+            onDismissRequest = {
+                showAssistDialog = false
+                pendingScorerId = null
+            },
+            title = { Text("Who assisted the goal?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Choose another player currently on the field, or mark the goal unassisted.")
+                    assistChoices.forEach { player ->
+                        OutlinedButton(
+                            onClick = {
+                                onRecordGoal(GoalSide.TEAM, pendingScorerId, player.playerId)
+                                pendingScorerId = null
+                                showAssistDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(player.name)
+                        }
+                    }
+                    TextButton(
+                        onClick = {
+                            onRecordGoal(GoalSide.TEAM, pendingScorerId, null)
+                            pendingScorerId = null
+                            showAssistDialog = false
+                        },
+                    ) {
+                        Text("Unassisted")
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = {
+                    showAssistDialog = false
+                    pendingScorerId = null
+                }) {
                     Text("Cancel")
                 }
             },
@@ -919,7 +1203,7 @@ private fun LiveScreen(
                         },
                         onFinalize = onFinalize,
                         onTeamGoal = { showScorerDialog = true },
-                        onOpponentGoal = { onRecordGoal(GoalSide.OPPONENT, null) },
+                        onOpponentGoal = { onRecordGoal(GoalSide.OPPONENT, null, null) },
                     )
                     PositionGroupsCard(
                         detail = detail,
@@ -991,7 +1275,7 @@ private fun LiveScreen(
                     },
                     onFinalize = onFinalize,
                     onTeamGoal = { showScorerDialog = true },
-                    onOpponentGoal = { onRecordGoal(GoalSide.OPPONENT, null) },
+                    onOpponentGoal = { onRecordGoal(GoalSide.OPPONENT, null, null) },
                 )
                 PositionGroupsCard(
                     detail = detail,
@@ -1053,6 +1337,8 @@ private fun LiveControlPanel(
     val template = detail.game.template()
     val totalTeamGoals = detail.goals.count { it.scoredBy == GoalSide.TEAM }
     val totalOpponentGoals = detail.goals.count { it.scoredBy == GoalSide.OPPONENT }
+    val showFinalizeButton =
+        detail.game.currentHalf == template.halfCount && gameRemainingSeconds <= 5 * 60
     Card {
         Column(
             modifier = Modifier
@@ -1105,9 +1391,13 @@ private fun LiveControlPanel(
                         ) {
                             Text("$teamName goal")
                         }
-                        OutlinedButton(
+                        Button(
                             onClick = onOpponentGoal,
                             modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = IceWhite,
+                                contentColor = BadgeBlack,
+                            ),
                         ) {
                             Text("${detail.game.opponent.ifBlank { "Opponent" }} goal")
                         }
@@ -1140,9 +1430,15 @@ private fun LiveControlPanel(
                 Button(onClick = onStartOrPause) {
                     Text(if (uiState.clockRunning) "Pause clock" else "Start clock")
                 }
-                OutlinedButton(
+                Button(
                     onClick = onAdvanceRound,
                     enabled = detail.game.status != GameStatus.FINAL && detail.game.currentRound < template.roundsPerHalf,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = IceWhite,
+                        contentColor = BadgeBlack,
+                        disabledContainerColor = IceWhite.copy(alpha = 0.45f),
+                        disabledContentColor = BadgeBlack.copy(alpha = 0.55f),
+                    ),
                 ) {
                     Text("Next sub round")
                 }
@@ -1161,8 +1457,10 @@ private fun LiveControlPanel(
                 ) {
                     Text("Advance half")
                 }
-                OutlinedButton(onClick = onFinalize) {
-                    Text("Finalize")
+                if (showFinalizeButton) {
+                    OutlinedButton(onClick = onFinalize) {
+                        Text("Finalize")
+                    }
                 }
             }
         }
@@ -1187,11 +1485,132 @@ private fun ScoreColumn(
     }
 }
 
+private enum class HistoryTableMetric(val label: String, val compactLabel: String) {
+    HALVES("Halves", "H"),
+    MINUTES("Minutes", "Min"),
+    GOALS("Goals", "G"),
+    ASSISTS("Assists", "A"),
+    DIFFERENTIAL("Differential", "+/-"),
+}
+
+@Composable
+private fun HistoryStatsTable(
+    playerMetrics: List<com.example.soccergamemanager.domain.PlayerMetrics>,
+    selectedMetrics: List<HistoryTableMetric>,
+) {
+    val horizontalState = rememberScrollState()
+    val positions = com.example.soccergamemanager.domain.GameTemplateConfig.DEFAULT_POSITIONS
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(horizontalState),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
+    ) {
+        Row {
+            StatsHeaderCell(label = "Player", width = 148.dp)
+            positions.forEach { position ->
+                StatsHeaderCell(label = position.label, width = 156.dp)
+            }
+        }
+        playerMetrics.forEach { player ->
+            Row {
+                StatsPlayerCell(
+                    playerName = player.playerName,
+                    totalMinutes = player.totalMinutes,
+                    totalGoals = player.totalGoalsScored,
+                    totalAssists = player.totalAssists,
+                    totalDifferential = player.scoreDifferentialWhileAssigned,
+                    width = 148.dp,
+                )
+                positions.forEach { position ->
+                    StatsMetricCell(
+                        metrics = player.positionStats[position]
+                            ?: com.example.soccergamemanager.domain.PositionStatMetrics(),
+                        visibleMetrics = selectedMetrics,
+                        width = 156.dp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatsHeaderCell(label: String, width: androidx.compose.ui.unit.Dp) {
+    Surface(
+        modifier = Modifier.width(width),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        tonalElevation = 2.dp,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(12.dp),
+            style = MaterialTheme.typography.titleLarge,
+        )
+    }
+}
+
+@Composable
+private fun StatsPlayerCell(
+    playerName: String,
+    totalMinutes: Double,
+    totalGoals: Int,
+    totalAssists: Int,
+    totalDifferential: Int,
+    width: androidx.compose.ui.unit.Dp,
+) {
+    Surface(
+        modifier = Modifier.width(width),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(playerName, style = MaterialTheme.typography.titleLarge)
+            Text("Min ${"%.1f".format(totalMinutes)}")
+            Text("G $totalGoals")
+            Text("A $totalAssists")
+            Text("Diff ${formatDifferential(totalDifferential)}")
+        }
+    }
+}
+
+@Composable
+private fun StatsMetricCell(
+    metrics: com.example.soccergamemanager.domain.PositionStatMetrics,
+    visibleMetrics: List<HistoryTableMetric>,
+    width: androidx.compose.ui.unit.Dp,
+) {
+    Surface(
+        modifier = Modifier.width(width),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            visibleMetrics.forEach { metric ->
+                Text(
+                    when (metric) {
+                        HistoryTableMetric.HALVES -> "${metric.compactLabel} ${metrics.halvesPlayed}"
+                        HistoryTableMetric.MINUTES -> "${metric.compactLabel} ${"%.1f".format(metrics.minutesPlayed)}"
+                        HistoryTableMetric.GOALS -> "${metric.compactLabel} ${metrics.goalsScored}"
+                        HistoryTableMetric.ASSISTS -> "${metric.compactLabel} ${metrics.assists}"
+                        HistoryTableMetric.DIFFERENTIAL -> "${metric.compactLabel} ${formatDifferential(metrics.scoreDifferential)}"
+                    },
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun InjuredPlayersCard(
     injuredPlayers: List<PlayerAvailabilityEntity>,
     playerLookup: Map<String, String>,
-    onClearPlayerInjury: (String) -> Unit,
+    onClearPlayerInjury: (String, Boolean) -> Unit,
 ) {
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1206,8 +1625,13 @@ private fun InjuredPlayersCard(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(playerLookup[injured.playerId].orEmpty())
-                        TextButton(onClick = { onClearPlayerInjury(injured.playerId) }) {
-                            Text("Clear injury")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { onClearPlayerInjury(injured.playerId, false) }) {
+                                Text("Return next sub")
+                            }
+                            TextButton(onClick = { onClearPlayerInjury(injured.playerId, true) }) {
+                                Text("Return now")
+                            }
                         }
                     }
                 }
@@ -1277,7 +1701,9 @@ private fun GoalLogCard(
             } else {
                 goals.forEach { goal ->
                     val label = if (goal.scoredBy == GoalSide.TEAM) {
-                        playerLookup[goal.scorerPlayerId] ?: "${teamName.ifBlank { "Team" }} goal"
+                        val scorer = playerLookup[goal.scorerPlayerId] ?: "${teamName.ifBlank { "Team" }} goal"
+                        val assister = goal.assisterPlayerId?.let(playerLookup::get)
+                        if (assister != null) "$scorer • Ast: $assister" else scorer
                     } else {
                         "${opponentName.ifBlank { "Opponent" }} goal"
                     }
@@ -1358,12 +1784,17 @@ private fun LineupCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun HistoryScreen(
     uiState: AppUiState,
     onSelectGame: (String) -> Unit,
 ) {
     val metrics = uiState.teamMetrics
+    var selectedMetricNames by rememberSaveable {
+        mutableStateOf(HistoryTableMetric.entries.map { it.name })
+    }
+    val selectedMetrics = HistoryTableMetric.entries.filter { it.name in selectedMetricNames }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -1371,12 +1802,12 @@ private fun HistoryScreen(
     ) {
         item {
             ScreenHeader(
-                title = "History & Analytics",
-                subtitle = "Fairness, position distribution, and descriptive score correlations.",
+                title = "History & Stats",
+                subtitle = "Team results plus a per-position player stats table.",
             )
         }
         if (metrics == null || metrics.totalGames == 0) {
-            item { EmptyState("Finalize a few games to unlock season metrics.") }
+            item { EmptyState("Finalize a few games to unlock team metrics.") }
         } else {
             item {
                 Card {
@@ -1390,15 +1821,37 @@ private fun HistoryScreen(
                     }
                 }
             }
-            items(metrics.playerMetrics, key = { it.playerId }) { player ->
+            item {
                 Card {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(player.playerName, style = MaterialTheme.typography.titleLarge)
-                        Text("Minutes: ${"%.1f".format(player.totalMinutes)}")
-                        Text("Keeper starts: ${player.keeperCount}")
-                        Text("Score differential while assigned: ${player.scoreDifferentialWhileAssigned}")
-                        Text("Groups: ${player.groupCounts.entries.joinToString { "${it.key.label} ${it.value}" }}")
-                        Text("Positions: ${player.positionCounts.entries.joinToString { "${it.key.label} ${it.value}" }}")
+                        Text("Player position stats", style = MaterialTheme.typography.titleLarge)
+                        Text("Choose which metrics appear inside each position cell.")
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            HistoryTableMetric.entries.forEach { metric ->
+                                FilterChip(
+                                    selected = metric.name in selectedMetricNames,
+                                    onClick = {
+                                        selectedMetricNames = if (metric.name in selectedMetricNames) {
+                                            selectedMetricNames - metric.name
+                                        } else {
+                                            selectedMetricNames + metric.name
+                                        }
+                                    },
+                                    label = { Text(metric.label) },
+                                )
+                            }
+                        }
+                        if (selectedMetrics.isEmpty()) {
+                            Text("Select at least one metric to show the table.")
+                        } else {
+                            HistoryStatsTable(
+                                playerMetrics = metrics.playerMetrics,
+                                selectedMetrics = selectedMetrics,
+                            )
+                        }
                     }
                 }
             }
@@ -1565,7 +2018,7 @@ private fun RoundCard(
     detail: GameDetail,
     halfNumber: Int,
     roundNumber: Int,
-    onCycleAssignment: (String) -> Unit,
+    onOpenAssignment: (AssignmentEntity) -> Unit,
 ) {
     val template = detail.game.template()
     val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
@@ -1577,7 +2030,7 @@ private fun RoundCard(
             Text("Round $roundNumber", style = MaterialTheme.typography.titleLarge)
             assignments.forEach { assignment ->
                 OutlinedButton(
-                    onClick = { onCycleAssignment(assignment.assignmentId) },
+                    onClick = { onOpenAssignment(assignment) },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = detail.game.status != GameStatus.LIVE && detail.game.status != GameStatus.FINAL,
                 ) {
@@ -1588,6 +2041,130 @@ private fun RoundCard(
                     ) {
                         Text(assignment.position.label)
                         Text(playerLookup[assignment.playerId].orEmpty())
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GameDateTimePicker(
+    scheduledAtMillis: Long,
+    onScheduledAtChange: (Long) -> Unit,
+    context: android.content.Context,
+) {
+    val calendar = Calendar.getInstance().apply { timeInMillis = scheduledAtMillis }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Game date and time", style = MaterialTheme.typography.titleLarge)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            OutlinedButton(
+                onClick = {
+                    DatePickerDialog(
+                        context,
+                        { _, year, month, dayOfMonth ->
+                            val updated = Calendar.getInstance().apply {
+                                timeInMillis = scheduledAtMillis
+                                set(Calendar.YEAR, year)
+                                set(Calendar.MONTH, month)
+                                set(Calendar.DAY_OF_MONTH, dayOfMonth)
+                            }
+                            onScheduledAtChange(updated.timeInMillis)
+                        },
+                        calendar.get(Calendar.YEAR),
+                        calendar.get(Calendar.MONTH),
+                        calendar.get(Calendar.DAY_OF_MONTH),
+                    ).show()
+                },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(formatPickerDate(scheduledAtMillis))
+            }
+            OutlinedButton(
+                onClick = {
+                    TimePickerDialog(
+                        context,
+                        { _, hourOfDay, minute ->
+                            val updated = Calendar.getInstance().apply {
+                                timeInMillis = scheduledAtMillis
+                                set(Calendar.HOUR_OF_DAY, hourOfDay)
+                                set(Calendar.MINUTE, minute)
+                            }
+                            onScheduledAtChange(updated.timeInMillis)
+                        },
+                        calendar.get(Calendar.HOUR_OF_DAY),
+                        calendar.get(Calendar.MINUTE),
+                        false,
+                    ).show()
+                },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(formatPickerTime(scheduledAtMillis))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ManualLocksCard(
+    halfNumber: Int,
+    playerLookup: Map<String, String>,
+    locksByGroup: Map<Pair<Int, PositionGroup>, List<String>>,
+    onEditGroup: (PositionGroup) -> Unit,
+) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Half $halfNumber manual locks", style = MaterialTheme.typography.titleLarge)
+            Text("Lock key players into a position group before generating the lineup.")
+            listOf(
+                PositionGroup.GOALIE,
+                PositionGroup.DEFENSE,
+                PositionGroup.LR_MID,
+                PositionGroup.CM_STRIKER,
+            ).forEach { group ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.medium,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(group.label, style = MaterialTheme.typography.titleLarge)
+                            TextButton(onClick = { onEditGroup(group) }) {
+                                Text("Edit")
+                            }
+                        }
+                        val names = locksByGroup[halfNumber to group]
+                            .orEmpty()
+                            .mapNotNull { playerLookup[it] }
+                        if (names.isEmpty()) {
+                            Text("No players locked.")
+                        } else {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                names.forEach { name ->
+                                    ElevatedAssistChip(
+                                        onClick = { onEditGroup(group) },
+                                        label = { Text(name) },
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1625,11 +2202,19 @@ private fun ClockCard(
 private fun formatDate(epochMillis: Long): String =
     SimpleDateFormat("MMM d, yyyy h:mm a", Locale.US).format(Date(epochMillis))
 
+private fun formatPickerDate(epochMillis: Long): String =
+    SimpleDateFormat("EEE, MMM d, yyyy", Locale.US).format(Date(epochMillis))
+
+private fun formatPickerTime(epochMillis: Long): String =
+    SimpleDateFormat("h:mm a", Locale.US).format(Date(epochMillis))
+
 private fun formatClock(totalSeconds: Int): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%02d:%02d".format(minutes, seconds)
 }
+
+private fun formatDifferential(value: Int): String = if (value > 0) "+$value" else value.toString()
 
 private fun formatSignedClock(totalSeconds: Int): String {
     return if (totalSeconds >= 0) {

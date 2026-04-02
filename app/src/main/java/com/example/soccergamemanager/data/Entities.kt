@@ -8,6 +8,7 @@ import com.example.soccergamemanager.domain.FieldPosition
 import com.example.soccergamemanager.domain.GameStatus
 import com.example.soccergamemanager.domain.GameTemplateConfig
 import com.example.soccergamemanager.domain.GoalSide
+import com.example.soccergamemanager.domain.ManualGroupLock
 import com.example.soccergamemanager.domain.PositionGroup
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -68,6 +69,7 @@ data class GameEntity(
     val scheduledAt: Long,
     val status: GameStatus = GameStatus.PLANNED,
     val templateJson: String,
+    val manualGroupLocksJson: String = "[]",
     val plannerNotes: String = "",
     val currentHalf: Int = 1,
     val currentRound: Int = 1,
@@ -148,6 +150,7 @@ data class GoalEventEntity(
     val gameId: String,
     val scoredBy: GoalSide,
     val scorerPlayerId: String? = null,
+    val assisterPlayerId: String? = null,
     val halfNumber: Int,
     val roundIndex: Int,
     val elapsedSecondsInHalf: Int,
@@ -166,4 +169,8 @@ fun SeasonEntity.template(): GameTemplateConfig = appJson.decodeFromString(defau
 
 fun GameEntity.template(): GameTemplateConfig = appJson.decodeFromString(templateJson)
 
+fun GameEntity.manualGroupLocks(): List<ManualGroupLock> = appJson.decodeFromString(manualGroupLocksJson)
+
 fun GameTemplateConfig.toJson(): String = appJson.encodeToString(this)
+
+fun List<ManualGroupLock>.toJson(): String = appJson.encodeToString(this)

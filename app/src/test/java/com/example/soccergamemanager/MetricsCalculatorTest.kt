@@ -44,8 +44,8 @@ class MetricsCalculatorTest {
             AssignmentEntity("a6", "g1", "p3", 1, 2, FieldPosition.RIGHT_DEFENSE, PositionGroup.DEFENSE),
         )
         val goals = listOf(
-            GoalEventEntity("goal1", "g1", GoalSide.TEAM, "p2", 1, 1, 120),
-            GoalEventEntity("goal2", "g1", GoalSide.OPPONENT, null, 1, 2, 540),
+            GoalEventEntity("goal1", "g1", GoalSide.TEAM, "p2", "p3", 1, 1, 120),
+            GoalEventEntity("goal2", "g1", GoalSide.OPPONENT, null, null, 1, 2, 540),
         )
 
         val metrics = calculator.calculate(players, listOf(game), assignments, goals)
@@ -57,5 +57,7 @@ class MetricsCalculatorTest {
         assertEquals(1, alex.keeperCount)
         assertTrue(alex.totalMinutes > 0)
         assertEquals(0, alex.scoreDifferentialWhileAssigned)
+        assertEquals(1, metrics.playerMetrics.first { it.playerId == "p2" }.totalGoalsScored)
+        assertEquals(1, metrics.playerMetrics.first { it.playerId == "p3" }.totalAssists)
     }
 }

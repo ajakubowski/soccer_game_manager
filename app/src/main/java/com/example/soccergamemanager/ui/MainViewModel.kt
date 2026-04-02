@@ -11,6 +11,7 @@ import com.example.soccergamemanager.data.SettingsStore
 import com.example.soccergamemanager.data.SoccerRepository
 import com.example.soccergamemanager.domain.GameStatus
 import com.example.soccergamemanager.domain.GoalSide
+import com.example.soccergamemanager.domain.PositionGroup
 import com.example.soccergamemanager.domain.PrintableReport
 import com.example.soccergamemanager.domain.TeamMetrics
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -202,13 +203,42 @@ class MainViewModel(
     fun createSeason(name: String, yearText: String) {
         val year = yearText.toIntOrNull() ?: ZonedDateTime.now().year
         if (name.isBlank()) {
-            message.value = "Season name is required."
+            message.value = "Team name is required."
             return
         }
         launchTask {
             val seasonId = repository.createSeason(name.trim(), year)
             settingsStore.setSelectedSeasonId(seasonId)
-            message.value = "Season created."
+            message.value = "Team created."
+        }
+    }
+
+    fun updateSeason(season: SeasonEntity, name: String, yearText: String) {
+        val year = yearText.toIntOrNull() ?: season.year
+        if (name.isBlank()) {
+            message.value = "Team name is required."
+            return
+        }
+        launchTask {
+            repository.updateSeason(season, name.trim(), year)
+            if (selectedSeasonFlow.value == season.seasonId) {
+                settingsStore.setSelectedSeasonId(season.seasonId)
+            }
+            message.value = "Team updated."
+        }
+    }
+
+    fun deleteSeason(season: SeasonEntity) {
+        launchTask {
+            val replacementSeasonId = uiState.value.seasons
+                .filterNot { it.seasonId == season.seasonId }
+                .firstOrNull()
+                ?.seasonId
+            repository.deleteSeason(season)
+            if (selectedSeasonFlow.value == season.seasonId) {
+                settingsStore.setSelectedSeasonId(replacementSeasonId)
+            }
+            message.value = "Team deleted."
         }
     }
 
@@ -224,18 +254,13 @@ class MainViewModel(
         }
     }
 
-    fun updateSeasonDefaults(teamName: String, halfDurationText: String, substitutionWindowText: String) {
+    fun updateSeasonDefaults(halfDurationText: String, substitutionWindowText: String) {
         val seasonId = selectedSeasonFlow.value ?: return
-        val trimmedTeamName = teamName.trim()
-        if (trimmedTeamName.isBlank()) {
-            message.value = "Team name is required."
-            return
-        }
         val halfDuration = halfDurationText.toIntOrNull()?.coerceAtLeast(1) ?: 25
         val substitutionWindow = substitutionWindowText.toIntOrNull()?.coerceAtLeast(1) ?: 4
         launchTask {
-            repository.updateSeasonDefaults(seasonId, trimmedTeamName, halfDuration, substitutionWindow)
-            message.value = "Season defaults updated."
+            repository.updateSeasonDefaults(seasonId, halfDuration, substitutionWindow)
+            message.value = "Game defaults updated."
         }
     }
 
@@ -262,16 +287,24 @@ class MainViewModel(
         }
     }
 
-    fun createGame(opponent: String, location: String) {
+    fun createGame(opponent: String, location: String, scheduledAt: Long) {
         val seasonId = selectedSeasonFlow.value ?: return
         launchTask {
             val gameId = repository.createGame(
                 seasonId = seasonId,
                 opponent = opponent,
                 location = location,
+                scheduledAt = scheduledAt,
             )
             selectedGameId.value = gameId
             message.value = "Game created."
+        }
+    }
+
+    fun updateGameDetails(game: GameEntity, opponent: String, location: String, scheduledAt: Long) {
+        launchTask {
+            repository.updateGameDetails(game, opponent, location, scheduledAt)
+            message.value = "Game updated."
         }
     }
 
@@ -300,9 +333,24 @@ class MainViewModel(
         }
     }
 
+    fun updateManualGroupLock(halfNumber: Int, positionGroup: PositionGroup, playerIds: List<String>) {
+        val gameId = selectedGameId.value ?: return
+        launchTask {
+            repository.updateManualGroupLock(gameId, halfNumber, positionGroup, playerIds)
+            message.value = "Planner lock updated."
+        }
+    }
+
     fun cycleAssignmentPlayer(assignmentId: String) {
         launchTask {
             repository.cycleAssignmentPlayer(assignmentId)
+            refreshReport()
+        }
+    }
+
+    fun setAssignmentPlayer(assignmentId: String, replacementPlayerId: String) {
+        launchTask {
+            repository.setAssignmentPlayer(assignmentId, replacementPlayerId)
             refreshReport()
         }
     }
@@ -321,10 +369,10 @@ class MainViewModel(
         }
     }
 
-    fun clearPlayerInjury(playerId: String) {
+    fun clearPlayerInjury(playerId: String, returnImmediately: Boolean = false) {
         val gameId = selectedGameId.value ?: return
         launchTask {
-            repository.clearPlayerInjury(gameId, playerId)
+            repository.clearPlayerInjury(gameId, playerId, returnImmediately)
             refreshReport()
         }
     }
@@ -397,13 +445,14 @@ class MainViewModel(
         }
     }
 
-    fun recordGoal(side: GoalSide, scorerPlayerId: String? = null) {
+    fun recordGoal(side: GoalSide, scorerPlayerId: String? = null, assisterPlayerId: String? = null) {
         val detail = uiState.value.selectedGameDetail ?: return
         launchTask {
             repository.recordGoal(
                 gameId = detail.game.gameId,
                 side = side,
                 scorerPlayerId = scorerPlayerId,
+                assisterPlayerId = assisterPlayerId,
                 currentHalf = detail.game.currentHalf,
                 currentRound = detail.game.currentRound,
                 elapsedSeconds = uiState.value.effectiveHalfElapsedSeconds,
