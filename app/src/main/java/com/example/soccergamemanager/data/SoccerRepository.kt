@@ -15,6 +15,7 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.UUID
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -38,6 +39,13 @@ class SoccerRepository(
 
     fun observeGamesBySeason(seasonId: String?): Flow<List<GameEntity>> =
         seasonId?.let(gameDao::observeGamesBySeason) ?: flowOf(emptyList())
+
+    fun observeAssignmentCountsBySeason(seasonId: String?): Flow<Map<String, Int>> =
+        seasonId?.let { id ->
+            assignmentDao.observeAssignmentCountsBySeason(id).map { counts ->
+                counts.associate { it.gameId to it.assignmentCount }
+            }
+        } ?: flowOf(emptyMap())
 
     fun observeGameDetail(gameId: String?): Flow<GameDetail?> {
         if (gameId == null) return flowOf(null)
@@ -89,7 +97,7 @@ class SoccerRepository(
                     seasonId = seasonId,
                     name = name,
                     jerseyNumber = (index + 1).toString(),
-                    preferredKeeper = name in setOf("Parker", "Dylan", "Roman"),
+                    preferredKeeper = true,
                 ),
             )
         }
@@ -542,6 +550,13 @@ class SoccerRepository(
         players = playerDao.getPlayersBySeason(gameDao.getGame(gameId)?.seasonId ?: error("Missing game $gameId")),
         assignments = assignmentDao.getByGame(gameId),
         goals = goalDao.getByGame(gameId),
+        analytics = metricsCalculator.buildMatchReportAnalytics(
+            game = gameDao.getGame(gameId) ?: error("Missing game $gameId"),
+            players = playerDao.getPlayersBySeason(gameDao.getGame(gameId)?.seasonId ?: error("Missing game $gameId")),
+            assignments = assignmentDao.getByGame(gameId),
+            goals = goalDao.getByGame(gameId),
+            seasonMetrics = calculateMetrics(gameDao.getGame(gameId)?.seasonId ?: error("Missing game $gameId")),
+        ),
     )
 
     private suspend fun buildHistory(seasonId: String): Map<String, PlayerSeasonHistory> {

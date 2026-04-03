@@ -31,6 +31,7 @@ data class AppUiState(
     val selectedSeasonId: String? = null,
     val players: List<PlayerEntity> = emptyList(),
     val games: List<GameEntity> = emptyList(),
+    val assignmentCountsByGame: Map<String, Int> = emptyMap(),
     val selectedGameId: String? = null,
     val selectedGameDetail: GameDetail? = null,
     val teamMetrics: TeamMetrics? = null,
@@ -68,6 +69,9 @@ class MainViewModel(
     private val gamesFlow = selectedSeasonFlow
         .flatMapLatest { repository.observeGamesBySeason(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val assignmentCountsFlow = selectedSeasonFlow
+        .flatMapLatest { repository.observeAssignmentCountsBySeason(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
     private val gameDetailFlow = selectedGameId
         .flatMapLatest { repository.observeGameDetail(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -84,11 +88,13 @@ class MainViewModel(
     }
     private val gameUiFlow = combine(
         gamesFlow,
+        assignmentCountsFlow,
         selectedGameId,
         gameDetailFlow,
-    ) { games, activeGameId, detail ->
+    ) { games, assignmentCountsByGame, activeGameId, detail ->
         GameUiSnapshot(
             games = games,
+            assignmentCountsByGame = assignmentCountsByGame,
             selectedGameId = activeGameId,
             selectedGameDetail = detail,
         )
@@ -99,6 +105,7 @@ class MainViewModel(
             selectedSeasonId = seasonUi.selectedSeasonId,
             players = seasonUi.players,
             games = gameUi.games,
+            assignmentCountsByGame = gameUi.assignmentCountsByGame,
             selectedGameId = gameUi.selectedGameId,
             selectedGameDetail = gameUi.selectedGameDetail,
         )
@@ -136,6 +143,7 @@ class MainViewModel(
             selectedSeasonId = base.selectedSeasonId,
             players = base.players,
             games = base.games,
+            assignmentCountsByGame = base.assignmentCountsByGame,
             selectedGameId = base.selectedGameId,
             selectedGameDetail = base.selectedGameDetail,
             teamMetrics = runtime.teamMetrics,
@@ -516,6 +524,7 @@ private data class BaseUiSnapshot(
     val selectedSeasonId: String?,
     val players: List<PlayerEntity>,
     val games: List<GameEntity>,
+    val assignmentCountsByGame: Map<String, Int>,
     val selectedGameId: String?,
     val selectedGameDetail: GameDetail?,
 )
@@ -528,6 +537,7 @@ private data class SeasonUiSnapshot(
 
 private data class GameUiSnapshot(
     val games: List<GameEntity>,
+    val assignmentCountsByGame: Map<String, Int>,
     val selectedGameId: String?,
     val selectedGameDetail: GameDetail?,
 )

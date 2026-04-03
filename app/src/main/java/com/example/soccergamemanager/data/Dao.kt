@@ -8,6 +8,11 @@ import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
+data class GameAssignmentCount(
+    val gameId: String,
+    val assignmentCount: Int,
+)
+
 @Dao
 interface SeasonDao {
     @Query("SELECT * FROM seasons ORDER BY year DESC, createdAt DESC")
@@ -110,6 +115,17 @@ interface AssignmentDao {
         """,
     )
     suspend fun getFinalizedAssignmentsBySeason(seasonId: String): List<AssignmentEntity>
+
+    @Query(
+        """
+        SELECT assignments.gameId AS gameId, COUNT(assignments.assignmentId) AS assignmentCount
+        FROM assignments
+        INNER JOIN games ON assignments.gameId = games.gameId
+        WHERE games.seasonId = :seasonId
+        GROUP BY assignments.gameId
+        """,
+    )
+    fun observeAssignmentCountsBySeason(seasonId: String): Flow<List<GameAssignmentCount>>
 }
 
 @Dao

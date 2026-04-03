@@ -123,10 +123,20 @@ data class PositionStatMetrics(
 
 data class TeamMetrics(
     val totalGames: Int,
+    val wins: Int = 0,
+    val draws: Int = 0,
+    val losses: Int = 0,
     val teamGoals: Int,
     val opponentGoals: Int,
+    val totalAssists: Int = 0,
+    val averageGoalDifferential: Double = 0.0,
+    val strongestHalf: Int? = null,
     val goalsByHalf: Map<Int, Pair<Int, Int>>,
     val playerMetrics: List<PlayerMetrics>,
+    val gameTrendPoints: List<SeasonTrendPoint> = emptyList(),
+    val positionGroupSummaries: List<PositionGroupSeasonSummary> = emptyList(),
+    val fairnessSummary: FairnessSummary = FairnessSummary(),
+    val playerDevelopmentSnapshots: List<PlayerDevelopmentSnapshot> = emptyList(),
 )
 
 data class AssignmentCell(
@@ -140,4 +150,130 @@ data class PrintableReport(
     val title: String,
     val plainText: String,
     val html: String,
+    val analytics: MatchReportAnalytics? = null,
+)
+
+data class SeasonTrendPoint(
+    val gameId: String,
+    val opponent: String,
+    val dateLabel: String,
+    val teamGoals: Int,
+    val opponentGoals: Int,
+    val differential: Int,
+    val resultLabel: String,
+    val minutesBalanceScore: Int,
+    val keeperBalanceScore: Int,
+)
+
+data class PositionGroupSeasonSummary(
+    val positionGroup: PositionGroup,
+    val totalMinutes: Double,
+    val goalContributions: Int,
+    val totalDifferential: Int,
+    val uniquePlayers: Int,
+)
+
+data class FairnessSummary(
+    val minutesBalanceScore: Int = 100,
+    val groupExposureBalanceScore: Int = 100,
+    val keeperBalanceScore: Int = 100,
+    val overusedPlayerIds: List<String> = emptyList(),
+    val underusedPlayerIds: List<String> = emptyList(),
+)
+
+data class PlayerTrendPoint(
+    val gameId: String,
+    val label: String,
+    val minutes: Double,
+    val goals: Int,
+    val assists: Int,
+    val differential: Int,
+    val uniquePositions: Int,
+    val uniqueGroups: Int,
+)
+
+data class PlayerDevelopmentSnapshot(
+    val playerId: String,
+    val playerName: String,
+    val totalMinutes: Double,
+    val totalGoals: Int,
+    val totalAssists: Int,
+    val keeperAppearances: Int,
+    val uniquePositions: Int,
+    val uniqueGroups: Int,
+    val positionVarietyScore: Int,
+    val groupVarietyScore: Int,
+    val trendPoints: List<PlayerTrendPoint> = emptyList(),
+)
+
+data class HalfScoreSummary(
+    val halfNumber: Int,
+    val teamGoals: Int,
+    val opponentGoals: Int,
+)
+
+enum class MatchTimelineKind {
+    TEAM_GOAL,
+    OPPONENT_GOAL,
+    SUB_ROUND,
+    HALF_START,
+    HALF_END,
+}
+
+data class MatchTimelineEvent(
+    val kind: MatchTimelineKind,
+    val label: String,
+    val halfNumber: Int,
+    val elapsedSecondsInHalf: Int,
+    val roundIndex: Int? = null,
+)
+
+data class RoundImpactSummary(
+    val halfNumber: Int,
+    val roundIndex: Int,
+    val goalsFor: Int,
+    val goalsAgainst: Int,
+    val differential: Int,
+)
+
+data class PositionGroupGameSummary(
+    val positionGroup: PositionGroup,
+    val totalMinutes: Double,
+    val goalsFor: Int,
+    val goalsAgainst: Int,
+    val differential: Int,
+    val goalContributions: Int,
+    val playersUsed: List<String>,
+)
+
+data class PlayerUsageSummary(
+    val playerId: String,
+    val playerName: String,
+    val minutes: Double,
+    val goals: Int,
+    val assists: Int,
+    val keeperRounds: Int,
+    val positions: List<FieldPosition>,
+    val groups: List<PositionGroup>,
+    val fairnessDeltaMinutes: Double,
+)
+
+data class CoachTakeaway(
+    val title: String,
+    val body: String,
+)
+
+data class MatchReportAnalytics(
+    val opponent: String,
+    val dateLabel: String,
+    val location: String,
+    val status: GameStatus,
+    val teamGoals: Int,
+    val opponentGoals: Int,
+    val halfScores: List<HalfScoreSummary>,
+    val timelineEvents: List<MatchTimelineEvent>,
+    val roundImpactSummaries: List<RoundImpactSummary>,
+    val positionGroupSummaries: List<PositionGroupGameSummary>,
+    val playerUsage: List<PlayerUsageSummary>,
+    val takeaways: List<CoachTakeaway>,
 )

@@ -5,8 +5,10 @@ import android.app.TimePickerDialog
 import android.content.res.Configuration
 import android.media.AudioManager
 import android.media.ToneGenerator
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -15,9 +17,11 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -36,6 +40,7 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Print
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SportsSoccer
@@ -72,15 +77,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -107,8 +115,10 @@ import com.example.soccergamemanager.ui.theme.IceWhite
 import com.example.soccergamemanager.ui.theme.McFarlandBlue
 import com.example.soccergamemanager.ui.theme.McFarlandBlueDark
 import java.text.SimpleDateFormat
-import java.util.Calendar
+import java.time.Instant
 import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -119,11 +129,55 @@ private enum class Destination(
 ) {
     Setup("setup", "Setup", Icons.Outlined.Settings),
     Games("games", "Games", Icons.Outlined.Event),
-    Planner("planner", "Planner", Icons.Outlined.Tune),
-    Live("live", "Live", Icons.Outlined.Timer),
     History("history", "History & Stats", Icons.Outlined.BarChart),
     Reports("reports", "Reports", Icons.Outlined.Print),
 }
+
+private enum class GameHubTab(val routeSegment: String, val label: String) {
+    OVERVIEW("overview", "Overview"),
+    PLANNER("planner", "Planner"),
+    LIVE("live", "Live"),
+    REPORT("report", "Report"),
+}
+
+private enum class GameWorkflowStatus(val label: String) {
+    NEEDS_LINEUP("Needs lineup"),
+    READY("Ready"),
+    LIVE("Live"),
+    FINAL("Final"),
+}
+
+private object GameHubRoute {
+    const val base = "game_hub"
+    const val gameIdArg = "gameId"
+    const val tabArg = "tab"
+    const val routePattern = "$base/{$gameIdArg}/{$tabArg}"
+
+    fun create(gameId: String, tab: GameHubTab): String = "$base/$gameId/${tab.routeSegment}"
+}
+
+private fun AppUiState.workflowStatus(game: GameEntity): GameWorkflowStatus = when (game.status) {
+    GameStatus.LIVE -> GameWorkflowStatus.LIVE
+    GameStatus.FINAL -> GameWorkflowStatus.FINAL
+    else -> if ((assignmentCountsByGame[game.gameId] ?: 0) > 0) {
+        GameWorkflowStatus.READY
+    } else {
+        GameWorkflowStatus.NEEDS_LINEUP
+    }
+}
+
+private fun defaultHubTabFor(uiState: AppUiState, game: GameEntity): GameHubTab = when (uiState.workflowStatus(game)) {
+    GameWorkflowStatus.NEEDS_LINEUP -> GameHubTab.PLANNER
+    GameWorkflowStatus.READY -> GameHubTab.OVERVIEW
+    GameWorkflowStatus.LIVE -> GameHubTab.LIVE
+    GameWorkflowStatus.FINAL -> GameHubTab.REPORT
+}
+
+private fun String?.isGamesSectionRoute(): Boolean =
+    this == Destination.Games.route || this == GameHubRoute.routePattern
+
+private fun gameHubTabFromRouteSegment(routeSegment: String?): GameHubTab =
+    GameHubTab.entries.firstOrNull { it.routeSegment == routeSegment } ?: GameHubTab.OVERVIEW
 
 @Composable
 fun SoccerManagerRoot(viewModel: MainViewModel) {
@@ -147,10 +201,14 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                 containerColor = MaterialTheme.colorScheme.inverseSurface,
             ) {
                 Destination.entries.forEach { destination ->
+                    val selected = when (destination) {
+                        Destination.Games -> currentRoute.isGamesSectionRoute()
+                        else -> currentRoute == destination.route
+                    }
                     NavigationBarItem(
-                        selected = currentRoute == destination.route,
+                        selected = selected,
                         onClick = {
-                            if (currentRoute != destination.route) {
+                            if (!selected) {
                                 navController.navigate(destination.route) {
                                     popUpTo(navController.graph.findStartDestination().id) {
                                         inclusive = false
@@ -192,42 +250,52 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                 startDestination = Destination.Setup.route,
             ) {
                 composable(Destination.Setup.route) {
-                SetupScreen(
-                    uiState = uiState,
-                    onCreateSeason = viewModel::createSeason,
-                    onSelectSeason = viewModel::selectSeason,
-                    onUpdateSeason = viewModel::updateSeason,
-                    onDeleteSeason = viewModel::deleteSeason,
-                    onAddPlayer = viewModel::addPlayer,
-                    onUpdateSeasonDefaults = viewModel::updateSeasonDefaults,
-                    onUpdatePlayer = viewModel::updatePlayerDetails,
-                    onTogglePlayerActive = viewModel::togglePlayerActive,
-                )
-            }
+                    SetupScreen(
+                        uiState = uiState,
+                        onCreateSeason = viewModel::createSeason,
+                        onSelectSeason = viewModel::selectSeason,
+                        onUpdateSeason = viewModel::updateSeason,
+                        onDeleteSeason = viewModel::deleteSeason,
+                        onAddPlayer = viewModel::addPlayer,
+                        onUpdateSeasonDefaults = viewModel::updateSeasonDefaults,
+                        onUpdatePlayer = viewModel::updatePlayerDetails,
+                        onTogglePlayerActive = viewModel::togglePlayerActive,
+                    )
+                }
                 composable(Destination.Games.route) {
-                GamesScreen(
-                    uiState = uiState,
-                    onCreateGame = viewModel::createGame,
-                    onUpdateGame = viewModel::updateGameDetails,
-                    onSelectGame = { gameId, destination ->
-                        viewModel.selectGame(gameId)
-                        navController.navigate(destination.route)
+                    GamesScreen(
+                        uiState = uiState,
+                        onCreateGame = viewModel::createGame,
+                        onUpdateGame = viewModel::updateGameDetails,
+                        onOpenGameHub = { gameId, initialTab ->
+                            viewModel.selectGame(gameId)
+                            navController.navigate(GameHubRoute.create(gameId, initialTab))
+                        },
+                        onOpenReports = { gameId ->
+                            viewModel.selectGame(gameId)
+                            navController.navigate(Destination.Reports.route)
                         },
                     )
                 }
-                composable(Destination.Planner.route) {
-                PlannerScreen(
-                    uiState = uiState,
-                    onSelectGame = viewModel::selectGame,
-                    onToggleAvailability = viewModel::toggleAvailability,
-                    onGenerateAssignments = viewModel::generateAssignments,
-                    onUpdateManualGroupLock = viewModel::updateManualGroupLock,
-                    onSetAssignmentPlayer = viewModel::setAssignmentPlayer,
-                )
-            }
-                composable(Destination.Live.route) {
-                    LiveScreen(
+                composable(GameHubRoute.routePattern) { entry ->
+                    val gameId = entry.arguments?.getString(GameHubRoute.gameIdArg)
+                    val initialTab = gameHubTabFromRouteSegment(entry.arguments?.getString(GameHubRoute.tabArg))
+                    if (gameId != null) {
+                        LaunchedEffect(gameId) {
+                            viewModel.selectGame(gameId)
+                        }
+                    }
+                    GameHubScreen(
                         uiState = uiState,
+                        initialTab = initialTab,
+                        onBackToGames = { navController.popBackStack(Destination.Games.route, false) },
+                        onOpenTopLevelReports = { navController.navigate(Destination.Reports.route) },
+                        onSelectGame = viewModel::selectGame,
+                        onRefreshReport = viewModel::refreshReport,
+                        onGenerateAssignments = viewModel::generateAssignments,
+                        onToggleAvailability = viewModel::toggleAvailability,
+                        onUpdateManualGroupLock = viewModel::updateManualGroupLock,
+                        onSetAssignmentPlayer = viewModel::setAssignmentPlayer,
                         onStartOrPause = viewModel::startOrPauseClock,
                         onAdvanceRound = viewModel::advanceRound,
                         onAdvanceHalf = viewModel::advanceHalf,
@@ -247,6 +315,7 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                 composable(Destination.Reports.route) {
                     ReportsScreen(
                         uiState = uiState,
+                        onSelectGame = viewModel::selectGame,
                         onRefresh = viewModel::refreshReport,
                     )
                 }
@@ -280,7 +349,7 @@ private fun SetupScreen(
     }
     var playerName by rememberSaveable { mutableStateOf("") }
     var jerseyNumber by rememberSaveable { mutableStateOf("") }
-    var preferredKeeper by rememberSaveable { mutableStateOf(false) }
+    var preferredKeeper by rememberSaveable { mutableStateOf(true) }
     var editingPlayerId by rememberSaveable(uiState.selectedSeasonId) { mutableStateOf<String?>(null) }
     var halfDurationMinutes by rememberSaveable(uiState.selectedSeasonId) {
         mutableStateOf(selectedTemplate?.halfDurationMinutes?.toString() ?: "25")
@@ -321,7 +390,7 @@ private fun SetupScreen(
                     FilterChip(
                         selected = editPreferredKeeper,
                         onClick = { editPreferredKeeper = !editPreferredKeeper },
-                        label = { Text("Preferred keeper") },
+                        label = { Text("Keeper eligible") },
                     )
                     OutlinedTextField(
                         value = editNotes,
@@ -463,14 +532,14 @@ private fun SetupScreen(
                     FilterChip(
                         selected = preferredKeeper,
                         onClick = { preferredKeeper = !preferredKeeper },
-                        label = { Text("Preferred keeper") },
+                        label = { Text("Keeper eligible") },
                     )
                     Button(
                         onClick = {
                             onAddPlayer(playerName, jerseyNumber, preferredKeeper)
                             playerName = ""
                             jerseyNumber = ""
-                            preferredKeeper = false
+                            preferredKeeper = true
                         },
                         enabled = uiState.selectedSeasonId != null,
                     ) {
@@ -494,7 +563,7 @@ private fun SetupScreen(
                     Column {
                         Text(player.name, style = MaterialTheme.typography.titleLarge)
                         Text(
-                            "Jersey ${player.jerseyNumber.ifBlank { "--" }} • ${if (player.preferredKeeper) "Keeper eligible" else "Field player"}",
+                            "Jersey ${player.jerseyNumber.ifBlank { "--" }} • ${if (player.preferredKeeper) "Keeper eligible" else "Not keeper eligible"}",
                         )
                         if (player.notes.isNotBlank()) {
                             Text(player.notes)
@@ -524,7 +593,8 @@ private fun GamesScreen(
     uiState: AppUiState,
     onCreateGame: (String, String, Long) -> Unit,
     onUpdateGame: (GameEntity, String, String, Long) -> Unit,
-    onSelectGame: (String, Destination) -> Unit,
+    onOpenGameHub: (String, GameHubTab) -> Unit,
+    onOpenReports: (String) -> Unit,
 ) {
     val context = LocalContext.current
     var opponent by rememberSaveable { mutableStateOf("") }
@@ -532,6 +602,16 @@ private fun GamesScreen(
     var scheduledAtMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
     var editingGameId by rememberSaveable { mutableStateOf<String?>(null) }
     val editingGame = uiState.games.firstOrNull { it.gameId == editingGameId }
+    val now = remember(uiState.games) { ZonedDateTime.now() }
+    val liveGame = uiState.games.firstOrNull { uiState.workflowStatus(it) == GameWorkflowStatus.LIVE }
+    val focusGame = uiState.games
+        .filterNot { it.gameId == liveGame?.gameId }
+        .sortedBy { it.scheduledAt }
+        .firstOrNull { game ->
+            Instant.ofEpochMilli(game.scheduledAt)
+                .atZone(ZoneId.systemDefault())
+                .toLocalDate() >= now.toLocalDate()
+        } ?: uiState.games.sortedByDescending { it.scheduledAt }.firstOrNull()
 
     editingGame?.let { game ->
         var editOpponent by rememberSaveable(game.gameId) { mutableStateOf(game.opponent) }
@@ -586,10 +666,52 @@ private fun GamesScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
-            ScreenHeader(
+            CompactScreenHeader(
                 title = "Games",
-                subtitle = "Create games, jump into planning, and move directly into live management.",
+                subtitle = "Choose a match and manage planning, live play, and reports from one place.",
             )
+        }
+        if (liveGame != null) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenGameHub(liveGame.gameId, GameHubTab.LIVE) },
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Continue live game", style = MaterialTheme.typography.titleLarge)
+                        Text("${liveGame.opponent} • ${formatDate(liveGame.scheduledAt)}")
+                        Button(onClick = { onOpenGameHub(liveGame.gameId, GameHubTab.LIVE) }) {
+                            Text("Resume live")
+                        }
+                    }
+                }
+            }
+        }
+        if (focusGame != null) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenGameHub(focusGame.gameId, defaultHubTabFor(uiState, focusGame)) },
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Today / Next game", style = MaterialTheme.typography.titleLarge)
+                        Text(focusGame.opponent, style = MaterialTheme.typography.headlineSmall)
+                        Text("${formatDate(focusGame.scheduledAt)} • ${focusGame.location.ifBlank { "Location TBD" }}")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            WorkflowStatusChip(uiState.workflowStatus(focusGame))
+                            TextButton(onClick = { onOpenGameHub(focusGame.gameId, defaultHubTabFor(uiState, focusGame)) }) {
+                                Text("Open game hub")
+                            }
+                        }
+                    }
+                }
+            }
         }
         item {
             Card {
@@ -627,33 +749,371 @@ private fun GamesScreen(
             }
         }
         items(uiState.games, key = { it.gameId }) { game ->
+            val workflowStatus = uiState.workflowStatus(game)
+            val primaryTab = when (workflowStatus) {
+                GameWorkflowStatus.NEEDS_LINEUP -> GameHubTab.PLANNER
+                GameWorkflowStatus.READY -> GameHubTab.OVERVIEW
+                GameWorkflowStatus.LIVE -> GameHubTab.LIVE
+                GameWorkflowStatus.FINAL -> GameHubTab.REPORT
+            }
+            val primaryLabel = when (workflowStatus) {
+                GameWorkflowStatus.NEEDS_LINEUP -> "Plan lineup"
+                GameWorkflowStatus.READY -> "Review lineup"
+                GameWorkflowStatus.LIVE -> "Resume live"
+                GameWorkflowStatus.FINAL -> "View report"
+            }
             Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(game.opponent, style = MaterialTheme.typography.titleLarge)
-                    Text("${formatDate(game.scheduledAt)} • ${game.location.ifBlank { "Location TBD" }}")
-                    Text("Status: ${game.status.name}")
-                    TextButton(
-                        onClick = { editingGameId = game.gameId },
-                        modifier = Modifier.align(Alignment.End),
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenGameHub(game.gameId, defaultHubTabFor(uiState, game)) }
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top,
                     ) {
-                        Text("Edit game")
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(game.opponent, style = MaterialTheme.typography.titleLarge)
+                            Text("${formatDate(game.scheduledAt)} • ${game.location.ifBlank { "Location TBD" }}")
+                        }
+                        WorkflowStatusChip(workflowStatus)
+                    }
+                    Button(
+                        onClick = { onOpenGameHub(game.gameId, primaryTab) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(primaryLabel)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ElevatedAssistChip(
-                            onClick = { onSelectGame(game.gameId, Destination.Planner) },
-                            label = { Text("Planner") },
-                            leadingIcon = { Icon(Icons.Outlined.Tune, contentDescription = null) },
+                        TextButton(onClick = { editingGameId = game.gameId }) {
+                            Text("Edit game")
+                        }
+                        TextButton(onClick = { onOpenGameHub(game.gameId, defaultHubTabFor(uiState, game)) }) {
+                            Text("Open hub")
+                        }
+                        if (workflowStatus == GameWorkflowStatus.FINAL) {
+                            TextButton(onClick = { onOpenReports(game.gameId) }) {
+                                Text("Report")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GameHubScreen(
+    uiState: AppUiState,
+    initialTab: GameHubTab,
+    onBackToGames: () -> Unit,
+    onOpenTopLevelReports: () -> Unit,
+    onSelectGame: (String) -> Unit,
+    onRefreshReport: () -> Unit,
+    onGenerateAssignments: () -> Unit,
+    onToggleAvailability: (String, Boolean) -> Unit,
+    onUpdateManualGroupLock: (Int, PositionGroup, List<String>) -> Unit,
+    onSetAssignmentPlayer: (String, String) -> Unit,
+    onStartOrPause: () -> Unit,
+    onAdvanceRound: () -> Unit,
+    onAdvanceHalf: (Set<String>) -> Unit,
+    onRecordGoal: (GoalSide, String?, String?) -> Unit,
+    onApplyLiveSub: (String, String) -> Unit,
+    onApplyInjurySub: (String, String) -> Unit,
+    onClearPlayerInjury: (String, Boolean) -> Unit,
+    onFinalize: () -> Unit,
+) {
+    val detail = uiState.selectedGameDetail ?: run {
+        EmptyState("Open a game from the Games tab to manage it from the game hub.")
+        return
+    }
+    var selectedTab by rememberSaveable(detail.game.gameId, initialTab.routeSegment) {
+        mutableStateOf(initialTab)
+    }
+    var headerExpanded by rememberSaveable(detail.game.gameId) {
+        mutableStateOf(initialTab == GameHubTab.OVERVIEW)
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        GameHubHeader(
+            uiState = uiState,
+            detail = detail,
+            onBackToGames = onBackToGames,
+            onOpenTopLevelReports = onOpenTopLevelReports,
+            expanded = headerExpanded,
+            onToggleExpanded = { headerExpanded = !headerExpanded },
+        )
+        GameHubTabButtons(
+            selectedTab = selectedTab,
+            onSelectTab = { selectedTab = it },
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .weight(1f),
+        ) {
+            when (selectedTab) {
+                GameHubTab.OVERVIEW -> OverviewTab(
+                    uiState = uiState,
+                    detail = detail,
+                    onGenerateAssignments = onGenerateAssignments,
+                    onOpenPlanner = { selectedTab = GameHubTab.PLANNER },
+                    onOpenLive = { selectedTab = GameHubTab.LIVE },
+                    onOpenReport = { selectedTab = GameHubTab.REPORT },
+                )
+
+                GameHubTab.PLANNER -> PlannerScreen(
+                    uiState = uiState,
+                    onToggleAvailability = onToggleAvailability,
+                    onGenerateAssignments = onGenerateAssignments,
+                    onUpdateManualGroupLock = onUpdateManualGroupLock,
+                    onSetAssignmentPlayer = onSetAssignmentPlayer,
+                    showHeader = false,
+                    onGoToLive = { selectedTab = GameHubTab.LIVE },
+                )
+
+                GameHubTab.LIVE -> LiveScreen(
+                    uiState = uiState,
+                    onStartOrPause = onStartOrPause,
+                    onAdvanceRound = onAdvanceRound,
+                    onAdvanceHalf = onAdvanceHalf,
+                    onRecordGoal = onRecordGoal,
+                    onApplyLiveSub = onApplyLiveSub,
+                    onApplyInjurySub = onApplyInjurySub,
+                    onClearPlayerInjury = onClearPlayerInjury,
+                    onFinalize = onFinalize,
+                    showHeader = false,
+                )
+
+                GameHubTab.REPORT -> ReportsScreen(
+                    uiState = uiState,
+                    onSelectGame = onSelectGame,
+                    onRefresh = onRefreshReport,
+                    showHeader = false,
+                    showGamePicker = false,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GameHubHeader(
+    uiState: AppUiState,
+    detail: GameDetail,
+    onBackToGames: () -> Unit,
+    onOpenTopLevelReports: () -> Unit,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+) {
+    val teamName = uiState.selectedSeason?.name?.ifBlank { "Team" } ?: "Team"
+    val workflowStatus = uiState.workflowStatus(detail.game)
+    val teamGoals = detail.goals.count { it.scoredBy == GoalSide.TEAM }
+    val opponentGoals = detail.goals.count { it.scoredBy == GoalSide.OPPONENT }
+    val activeProgressIndex = when (workflowStatus) {
+        GameWorkflowStatus.NEEDS_LINEUP -> 0
+        GameWorkflowStatus.READY -> 1
+        GameWorkflowStatus.LIVE -> 2
+        GameWorkflowStatus.FINAL -> 3
+    }
+
+    Card(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp)) {
+        if (expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(onClick = onBackToGames) {
+                            Text("Back to Games")
+                        }
+                        IconButton(onClick = onToggleExpanded) {
+                            Icon(
+                                imageVector = Icons.Outlined.ExpandLess,
+                                contentDescription = "Minimize header",
+                            )
+                        }
+                    }
+                    TextButton(onClick = onOpenTopLevelReports) {
+                        Text("Global Reports")
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            teamName,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
                         )
-                        ElevatedAssistChip(
-                            onClick = { onSelectGame(game.gameId, Destination.Live) },
-                            label = { Text("Live") },
-                            leadingIcon = { Icon(Icons.Outlined.Timer, contentDescription = null) },
+                        Text(
+                            "${teamName.ifBlank { "Team" }} vs ${detail.game.opponent}",
+                            style = MaterialTheme.typography.titleLarge,
                         )
-                        ElevatedAssistChip(
-                            onClick = { onSelectGame(game.gameId, Destination.Reports) },
-                            label = { Text("Report") },
-                            leadingIcon = { Icon(Icons.Outlined.Print, contentDescription = null) },
+                        Text(
+                            "${formatDate(detail.game.scheduledAt)} • ${detail.game.location.ifBlank { "Location TBD" }}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        WorkflowStatusChip(workflowStatus)
+                        if (workflowStatus == GameWorkflowStatus.LIVE || workflowStatus == GameWorkflowStatus.FINAL) {
+                            Text(
+                                "$teamGoals - $opponentGoals",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        }
+                        CompactGameProgressSummary(activeProgressIndex = activeProgressIndex)
+                    }
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Game Overview",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                IconButton(
+                    onClick = onToggleExpanded,
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ExpandMore,
+                        contentDescription = "Expand header",
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OverviewTab(
+    uiState: AppUiState,
+    detail: GameDetail,
+    onGenerateAssignments: () -> Unit,
+    onOpenPlanner: () -> Unit,
+    onOpenLive: () -> Unit,
+    onOpenReport: () -> Unit,
+) {
+    val workflowStatus = uiState.workflowStatus(detail.game)
+    val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
+    val availableCount = detail.availability.count { it.isAvailable && !it.isInjured }
+    val teamGoals = detail.goals.count { it.scoredBy == GoalSide.TEAM }
+    val opponentGoals = detail.goals.count { it.scoredBy == GoalSide.OPPONENT }
+    val goalieSummary = (1..detail.game.template().halfCount).associateWith { halfNumber ->
+        detail.assignments.firstOrNull { it.halfNumber == halfNumber && it.position == FieldPosition.GOALIE }
+            ?.playerId
+            ?.let(playerLookup::get)
+            ?: "Not assigned"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Card {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Match overview", style = MaterialTheme.typography.titleLarge)
+                Text("Status: ${workflowStatus.label}")
+                Text(
+                    if (detail.assignments.isEmpty()) {
+                        "Lineup readiness: lineup still needs to be generated."
+                    } else {
+                        "Lineup readiness: lineup is ready for review."
+                    },
+                )
+                Text("Available players: $availableCount")
+                goalieSummary.forEach { (halfNumber, goalieName) ->
+                    Text("Half $halfNumber goalie: $goalieName")
+                }
+                if (workflowStatus == GameWorkflowStatus.LIVE || workflowStatus == GameWorkflowStatus.FINAL) {
+                    Text("Current score: $teamGoals-$opponentGoals")
+                }
+                if (workflowStatus == GameWorkflowStatus.LIVE) {
+                    Text("Live state: Half ${detail.game.currentHalf} • Sub round ${detail.game.currentRound}")
+                }
+                if (detail.game.plannerNotes.isNotBlank()) {
+                    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.primaryContainer) {
+                        Text(detail.game.plannerNotes, modifier = Modifier.padding(12.dp))
+                    }
+                }
+            }
+        }
+        Card {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Next steps", style = MaterialTheme.typography.titleLarge)
+                if (detail.assignments.isEmpty() && workflowStatus != GameWorkflowStatus.FINAL) {
+                    Button(onClick = onGenerateAssignments, modifier = Modifier.fillMaxWidth()) {
+                        Text("Generate lineup")
+                    }
+                }
+                if (detail.assignments.isNotEmpty() && workflowStatus != GameWorkflowStatus.FINAL) {
+                    OutlinedButton(onClick = onOpenPlanner, modifier = Modifier.fillMaxWidth()) {
+                        Text("Review planner")
+                    }
+                }
+                when (workflowStatus) {
+                    GameWorkflowStatus.NEEDS_LINEUP -> {
+                        OutlinedButton(onClick = onOpenPlanner, modifier = Modifier.fillMaxWidth()) {
+                            Text("Open planner")
+                        }
+                    }
+
+                    GameWorkflowStatus.READY -> {
+                        Button(onClick = onOpenLive, modifier = Modifier.fillMaxWidth()) {
+                            Text("Start live")
+                        }
+                    }
+
+                    GameWorkflowStatus.LIVE -> {
+                        Button(onClick = onOpenLive, modifier = Modifier.fillMaxWidth()) {
+                            Text("Resume live")
+                        }
+                    }
+
+                    GameWorkflowStatus.FINAL -> {
+                        Button(onClick = onOpenReport, modifier = Modifier.fillMaxWidth()) {
+                            Text("Open report")
+                        }
                     }
                 }
             }
@@ -665,16 +1125,18 @@ private fun GamesScreen(
 @Composable
 private fun PlannerScreen(
     uiState: AppUiState,
-    onSelectGame: (String) -> Unit,
     onToggleAvailability: (String, Boolean) -> Unit,
     onGenerateAssignments: () -> Unit,
     onUpdateManualGroupLock: (Int, PositionGroup, List<String>) -> Unit,
     onSetAssignmentPlayer: (String, String) -> Unit,
+    showHeader: Boolean = true,
+    onGoToLive: (() -> Unit)? = null,
 ) {
     val detail = uiState.selectedGameDetail ?: run {
-        EmptyState("Select a game from the Games tab to plan lineups.")
+        EmptyState("Open a game from the Games tab to plan lineups.")
         return
     }
+    val readOnly = detail.game.status == GameStatus.LIVE || detail.game.status == GameStatus.FINAL
     val availabilityMap = detail.availability.associateBy({ it.playerId }, { it.isAvailable })
     val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
     val availablePlayers = detail.players
@@ -797,10 +1259,38 @@ private fun PlannerScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
-            ScreenHeader(
-                title = "Pregame Planner",
-                subtitle = "${detail.game.opponent} • ${formatDate(detail.game.scheduledAt)}",
-            )
+            if (showHeader) {
+                ScreenHeader(
+                    title = "Pregame Planner",
+                    subtitle = "${detail.game.opponent} • ${formatDate(detail.game.scheduledAt)}",
+                )
+            }
+        }
+        item {
+            Card {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Button(
+                        onClick = onGenerateAssignments,
+                        enabled = !readOnly,
+                    ) {
+                        Text(if (detail.assignments.isEmpty()) "Generate lineup" else "Regenerate")
+                    }
+                    if (onGoToLive != null) {
+                        OutlinedButton(
+                            onClick = onGoToLive,
+                            enabled = detail.assignments.isNotEmpty(),
+                        ) {
+                            Text("Go to live")
+                        }
+                    }
+                }
+            }
         }
         item {
             Card {
@@ -811,23 +1301,19 @@ private fun PlannerScreen(
                             val available = availabilityMap[player.playerId] != false
                             FilterChip(
                                 selected = available,
-                                onClick = { onToggleAvailability(player.playerId, !available) },
+                                onClick = { if (!readOnly) onToggleAvailability(player.playerId, !available) },
                                 label = { Text(player.name) },
+                                enabled = !readOnly,
                             )
-                        }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onGenerateAssignments) {
-                            Text(if (detail.assignments.isEmpty()) "Generate lineup" else "Regenerate")
-                        }
-                        TextButton(onClick = { onSelectGame(detail.game.gameId) }) {
-                            Text("Refresh game")
                         }
                     }
                     if (detail.game.plannerNotes.isNotBlank()) {
                         Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.primaryContainer) {
                             Text(detail.game.plannerNotes, modifier = Modifier.padding(12.dp))
                         }
+                    }
+                    if (readOnly) {
+                        Text("Planner is read-only once a game is live or finalized.")
                     }
                 }
             }
@@ -837,7 +1323,12 @@ private fun PlannerScreen(
                 halfNumber = halfNumber,
                 playerLookup = playerLookup,
                 locksByGroup = manualLocksByHalfGroup,
-                onEditGroup = { group -> editingLockKey = halfNumber to group },
+                onEditGroup = { group ->
+                    if (!readOnly) {
+                        editingLockKey = halfNumber to group
+                    }
+                },
+                editable = !readOnly,
             )
         }
         if (detail.assignments.isEmpty()) {
@@ -870,9 +1361,10 @@ private fun LiveScreen(
     onApplyInjurySub: (String, String) -> Unit,
     onClearPlayerInjury: (String, Boolean) -> Unit,
     onFinalize: () -> Unit,
+    showHeader: Boolean = true,
 ) {
     val detail = uiState.selectedGameDetail ?: run {
-        EmptyState("Select a planned game to manage it live.")
+        EmptyState("Open a game from the Games tab to manage it live.")
         return
     }
     val template = detail.game.template()
@@ -1185,6 +1677,9 @@ private fun LiveScreen(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
+                    if (detail.game.status == GameStatus.PLANNED && detail.assignments.isNotEmpty()) {
+                        LivePregameCard(detail = detail, currentAssignments = currentAssignments, nextAssignments = nextAssignments)
+                    }
                     LiveControlPanel(
                         detail = detail,
                         uiState = uiState,
@@ -1204,6 +1699,7 @@ private fun LiveScreen(
                         onFinalize = onFinalize,
                         onTeamGoal = { showScorerDialog = true },
                         onOpponentGoal = { onRecordGoal(GoalSide.OPPONENT, null, null) },
+                        showHeader = showHeader,
                     )
                     PositionGroupsCard(
                         detail = detail,
@@ -1257,6 +1753,9 @@ private fun LiveScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
+                if (detail.game.status == GameStatus.PLANNED && detail.assignments.isNotEmpty()) {
+                    LivePregameCard(detail = detail, currentAssignments = currentAssignments, nextAssignments = nextAssignments)
+                }
                 LiveControlPanel(
                     detail = detail,
                     uiState = uiState,
@@ -1276,6 +1775,7 @@ private fun LiveScreen(
                     onFinalize = onFinalize,
                     onTeamGoal = { showScorerDialog = true },
                     onOpponentGoal = { onRecordGoal(GoalSide.OPPONENT, null, null) },
+                    showHeader = showHeader,
                 )
                 PositionGroupsCard(
                     detail = detail,
@@ -1333,6 +1833,7 @@ private fun LiveControlPanel(
     onFinalize: () -> Unit,
     onTeamGoal: () -> Unit,
     onOpponentGoal: () -> Unit,
+    showHeader: Boolean = true,
 ) {
     val template = detail.game.template()
     val totalTeamGoals = detail.goals.count { it.scoredBy == GoalSide.TEAM }
@@ -1347,10 +1848,12 @@ private fun LiveControlPanel(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            ScreenHeader(
-                title = "Live Game",
-                subtitle = "${detail.game.opponent} • Half ${detail.game.currentHalf} • Sub round ${detail.game.currentRound}",
-            )
+            if (showHeader) {
+                ScreenHeader(
+                    title = "Live Game",
+                    subtitle = "${detail.game.opponent} • Half ${detail.game.currentHalf} • Sub round ${detail.game.currentRound}",
+                )
+            }
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.large,
@@ -1428,7 +1931,13 @@ private fun LiveControlPanel(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onStartOrPause) {
-                    Text(if (uiState.clockRunning) "Pause clock" else "Start clock")
+                    Text(
+                        when {
+                            uiState.clockRunning -> "Pause clock"
+                            detail.game.status == GameStatus.PLANNED -> "Start match"
+                            else -> "Start clock"
+                        },
+                    )
                 }
                 Button(
                     onClick = onAdvanceRound,
@@ -1485,6 +1994,171 @@ private fun ScoreColumn(
     }
 }
 
+@Composable
+private fun WorkflowStatusChip(
+    status: GameWorkflowStatus,
+    compact: Boolean = false,
+) {
+    val containerColor = when (status) {
+        GameWorkflowStatus.NEEDS_LINEUP -> MaterialTheme.colorScheme.surfaceVariant
+        GameWorkflowStatus.READY -> MaterialTheme.colorScheme.primaryContainer
+        GameWorkflowStatus.LIVE -> MaterialTheme.colorScheme.primary
+        GameWorkflowStatus.FINAL -> MaterialTheme.colorScheme.secondaryContainer
+    }
+    val contentColor = when (status) {
+        GameWorkflowStatus.LIVE -> MaterialTheme.colorScheme.onPrimary
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Surface(
+        color = containerColor,
+        contentColor = contentColor,
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Text(
+            status.label,
+            modifier = Modifier.padding(
+                horizontal = if (compact) 8.dp else 12.dp,
+                vertical = if (compact) 4.dp else 6.dp,
+            ),
+            style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+@Composable
+private fun GameHubTabButtons(
+    selectedTab: GameHubTab,
+    onSelectTab: (GameHubTab) -> Unit,
+) {
+    val rowBackground = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.18f)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clip(MaterialTheme.shapes.large)
+            .background(rowBackground)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        GameHubTab.entries.forEach { tab ->
+            val selected = selectedTab == tab
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(MaterialTheme.shapes.large)
+                    .clickable { onSelectTab(tab) },
+                color = if (selected) MaterialTheme.colorScheme.primary else IceWhite,
+                contentColor = if (selected) IceWhite else MaterialTheme.colorScheme.primary,
+                tonalElevation = if (selected) 0.dp else 3.dp,
+                shadowElevation = if (selected) 0.dp else 1.dp,
+                border = if (selected) {
+                    null
+                } else {
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                },
+                shape = MaterialTheme.shapes.large,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 7.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        tab.label,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactGameProgressSummary(
+    activeProgressIndex: Int,
+) {
+    val steps = listOf("Setup", "Ready", "Live", "Final")
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        steps.forEachIndexed { index, label ->
+            val completed = index <= activeProgressIndex
+            val isCurrent = index == activeProgressIndex
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Surface(
+                    color = if (completed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.small,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(if (isCurrent) 9.dp else 7.dp),
+                    )
+                }
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (completed) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                )
+            }
+            if (index < steps.lastIndex) {
+                Box(
+                    modifier = Modifier
+                        .height(2.dp)
+                        .width(12.dp)
+                        .padding(horizontal = 2.dp)
+                        .background(
+                            if (index < activeProgressIndex) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                            } else {
+                                MaterialTheme.colorScheme.outlineVariant
+                            },
+                            shape = MaterialTheme.shapes.small,
+                        ),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LivePregameCard(
+    detail: GameDetail,
+    currentAssignments: List<AssignmentEntity>,
+    nextAssignments: List<AssignmentEntity>,
+) {
+    val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Pregame live check", style = MaterialTheme.typography.titleLarge)
+            Text("Starting lineup is ready for kickoff.")
+            Text(
+                "On field: ${
+                    currentAssignments.joinToString { playerLookup[it.playerId].orEmpty() }
+                }",
+            )
+            if (nextAssignments.isNotEmpty()) {
+                Text(
+                    "Next sub round: ${
+                        nextAssignments.joinToString { playerLookup[it.playerId].orEmpty() }
+                    }",
+                )
+            }
+            Text("Position groups and lineup details are below for the final pre-kickoff check.")
+        }
+    }
+}
+
 private enum class HistoryTableMetric(val label: String, val compactLabel: String) {
     HALVES("Halves", "H"),
     MINUTES("Minutes", "Min"),
@@ -1493,6 +2167,53 @@ private enum class HistoryTableMetric(val label: String, val compactLabel: Strin
     DIFFERENTIAL("Differential", "+/-"),
 }
 
+private enum class HistoryMetricPreset(val label: String, val metrics: List<HistoryTableMetric>) {
+    USAGE("Usage", listOf(HistoryTableMetric.HALVES, HistoryTableMetric.MINUTES)),
+    ATTACKING("Attacking", listOf(HistoryTableMetric.GOALS, HistoryTableMetric.ASSISTS)),
+    IMPACT("Impact", listOf(HistoryTableMetric.MINUTES, HistoryTableMetric.DIFFERENTIAL)),
+    ALL("All", HistoryTableMetric.entries),
+}
+
+private enum class HeatmapMode(val label: String) {
+    TEAM_AGGREGATE("Team Aggregate"),
+    INDIVIDUAL_PLAYER("Individual Player"),
+}
+
+private enum class HeatmapMetric(val label: String, val explanation: String) {
+    MINUTES(
+        "Minutes",
+        "Minutes shows total time played at each position across finalized games. Darker cells mean more time spent in that position.",
+    ),
+    HALVES(
+        "Halves",
+        "Halves counts how many halves a player, or the full team total, has appeared in that position across finalized games.",
+    ),
+    GOALS(
+        "Goals",
+        "Goals counts team goals scored by players while they were assigned to that exact position.",
+    ),
+    ASSISTS(
+        "Assists",
+        "Assists counts recorded assists by players while they were assigned to that exact position.",
+    ),
+    DIFFERENTIAL(
+        "Differential",
+        "Differential shows goals for minus goals against while players were assigned to that position. Blue is positive, neutral is even, and red is negative.",
+    ),
+}
+
+private data class PositionHeatmapCell(
+    val rawValue: Double,
+    val displayValue: String,
+    val intensity: Float,
+)
+
+private data class PlayerPositionHeatmapRow(
+    val label: String,
+    val playerId: String? = null,
+    val cells: Map<FieldPosition, PositionHeatmapCell>,
+)
+
 @Composable
 private fun HistoryStatsTable(
     playerMetrics: List<com.example.soccergamemanager.domain.PlayerMetrics>,
@@ -1500,16 +2221,13 @@ private fun HistoryStatsTable(
 ) {
     val horizontalState = rememberScrollState()
     val positions = com.example.soccergamemanager.domain.GameTemplateConfig.DEFAULT_POSITIONS
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(horizontalState),
-        verticalArrangement = Arrangement.spacedBy(0.dp),
-    ) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(0.dp)) {
         Row {
             StatsHeaderCell(label = "Player", width = 148.dp)
-            positions.forEach { position ->
-                StatsHeaderCell(label = position.label, width = 156.dp)
+            Row(modifier = Modifier.horizontalScroll(horizontalState)) {
+                positions.forEach { position ->
+                    StatsHeaderCell(label = position.label, width = 156.dp)
+                }
             }
         }
         playerMetrics.forEach { player ->
@@ -1522,13 +2240,15 @@ private fun HistoryStatsTable(
                     totalDifferential = player.scoreDifferentialWhileAssigned,
                     width = 148.dp,
                 )
-                positions.forEach { position ->
-                    StatsMetricCell(
-                        metrics = player.positionStats[position]
-                            ?: com.example.soccergamemanager.domain.PositionStatMetrics(),
-                        visibleMetrics = selectedMetrics,
-                        width = 156.dp,
-                    )
+                Row(modifier = Modifier.horizontalScroll(horizontalState)) {
+                    positions.forEach { position ->
+                        StatsMetricCell(
+                            metrics = player.positionStats[position]
+                                ?: com.example.soccergamemanager.domain.PositionStatMetrics(),
+                            visibleMetrics = selectedMetrics,
+                            width = 156.dp,
+                        )
+                    }
                 }
             }
         }
@@ -1583,9 +2303,16 @@ private fun StatsMetricCell(
     visibleMetrics: List<HistoryTableMetric>,
     width: androidx.compose.ui.unit.Dp,
 ) {
+    val intensity = when {
+        visibleMetrics.contains(HistoryTableMetric.MINUTES) -> (metrics.minutesPlayed / 30.0).coerceIn(0.0, 1.0)
+        visibleMetrics.contains(HistoryTableMetric.GOALS) -> (metrics.goalsScored / 2.0).coerceIn(0.0, 1.0)
+        visibleMetrics.contains(HistoryTableMetric.ASSISTS) -> (metrics.assists / 2.0).coerceIn(0.0, 1.0)
+        visibleMetrics.contains(HistoryTableMetric.DIFFERENTIAL) -> (kotlin.math.abs(metrics.scoreDifferential) / 3.0).coerceIn(0.0, 1.0)
+        else -> (metrics.halvesPlayed / 4.0).coerceIn(0.0, 1.0)
+    }.toFloat()
     Surface(
         modifier = Modifier.width(width),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.12f + intensity * 0.30f),
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -1604,6 +2331,423 @@ private fun StatsMetricCell(
             }
         }
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PositionHeatmapCard(
+    playerMetrics: List<com.example.soccergamemanager.domain.PlayerMetrics>,
+    selectedPlayerId: String?,
+    selectedMode: HeatmapMode,
+    selectedMetric: HeatmapMetric,
+    onSelectMode: (HeatmapMode) -> Unit,
+    onSelectMetric: (HeatmapMetric) -> Unit,
+    onSelectPlayer: (String) -> Unit,
+) {
+    val selectedPlayer = playerMetrics.firstOrNull { it.playerId == selectedPlayerId } ?: playerMetrics.firstOrNull()
+    var showMetricInfo by remember { mutableStateOf(false) }
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Position heatmap", style = MaterialTheme.typography.titleLarge)
+                    Text("Quick visual scan of position usage and contribution across finalized games.")
+                }
+                IconButton(onClick = { showMetricInfo = true }) {
+                    Icon(
+                        imageVector = Icons.Outlined.Info,
+                        contentDescription = "Explain ${selectedMetric.label}",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                HeatmapMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = mode == selectedMode,
+                        onClick = { onSelectMode(mode) },
+                        label = { Text(mode.label) },
+                    )
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                HeatmapMetric.entries.forEach { metric ->
+                    FilterChip(
+                        selected = metric == selectedMetric,
+                        onClick = { onSelectMetric(metric) },
+                        label = { Text(metric.label) },
+                    )
+                }
+            }
+            if (selectedMode == HeatmapMode.INDIVIDUAL_PLAYER && selectedPlayer != null) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    playerMetrics.forEach { player ->
+                        FilterChip(
+                            selected = player.playerId == selectedPlayer.playerId,
+                            onClick = { onSelectPlayer(player.playerId) },
+                            label = { Text(player.playerName) },
+                        )
+                    }
+                }
+            }
+            BoxWithConstraints {
+                val wideLayout = maxWidth >= 960.dp
+                when (selectedMode) {
+                    HeatmapMode.TEAM_AGGREGATE -> {
+                        val teamRow = buildTeamAggregateHeatmapRow(playerMetrics, selectedMetric)
+                        val playerRow = selectedPlayer?.let { buildPlayerHeatmapRow(it, selectedMetric) }
+                        if (wideLayout && playerRow != null) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                HeatmapSummaryCard(
+                                    title = "Team aggregate",
+                                    subtitle = "Total ${selectedMetric.label.lowercase()} by position across the team.",
+                                    row = teamRow,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                HeatmapSummaryCard(
+                                    title = selectedPlayer.playerName,
+                                    subtitle = "Selected player preview by position.",
+                                    row = playerRow,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        } else {
+                            HeatmapSummaryCard(
+                                title = "Team aggregate",
+                                subtitle = "Total ${selectedMetric.label.lowercase()} by position across the team.",
+                                row = teamRow,
+                            )
+                        }
+                        AllPlayersHeatmapCard(
+                            rows = buildAllPlayersHeatmapRows(playerMetrics, selectedMetric),
+                            metric = selectedMetric,
+                        )
+                    }
+
+                    HeatmapMode.INDIVIDUAL_PLAYER -> {
+                        if (selectedPlayer != null) {
+                            val playerRow = buildPlayerHeatmapRow(selectedPlayer, selectedMetric)
+                            val teamRow = buildTeamAggregateHeatmapRow(playerMetrics, selectedMetric)
+                            if (wideLayout) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    HeatmapSummaryCard(
+                                        title = selectedPlayer.playerName,
+                                        subtitle = "${selectedMetric.label} by position for the selected player.",
+                                        row = playerRow,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    HeatmapSummaryCard(
+                                        title = "Team aggregate",
+                                        subtitle = "Overall team context for the same metric.",
+                                        row = teamRow,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                            } else {
+                                HeatmapSummaryCard(
+                                    title = selectedPlayer.playerName,
+                                    subtitle = "${selectedMetric.label} by position for the selected player.",
+                                    row = playerRow,
+                                )
+                            }
+                        } else {
+                            Text("Select a player to view the individual heatmap.")
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (showMetricInfo) {
+        AlertDialog(
+            onDismissRequest = { showMetricInfo = false },
+            confirmButton = {
+                TextButton(onClick = { showMetricInfo = false }) {
+                    Text("Close")
+                }
+            },
+            title = { Text(selectedMetric.label) },
+            text = { Text(selectedMetric.explanation) },
+        )
+    }
+}
+
+@Composable
+private fun HeatmapSummaryCard(
+    title: String,
+    subtitle: String,
+    row: PlayerPositionHeatmapRow,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SingleRowHeatmap(row = row)
+        }
+    }
+}
+
+@Composable
+private fun SingleRowHeatmap(row: PlayerPositionHeatmapRow) {
+    val positions = com.example.soccergamemanager.domain.GameTemplateConfig.DEFAULT_POSITIONS
+    val scrollState = rememberScrollState()
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(row.label, style = MaterialTheme.typography.labelLarge)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clipToBounds(),
+        ) {
+            Row(modifier = Modifier.horizontalScroll(scrollState)) {
+                positions.forEach { position ->
+                    Column(
+                        modifier = Modifier.width(104.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            position.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        HeatmapCell(cell = row.cells[position] ?: PositionHeatmapCell(0.0, "0", 0f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AllPlayersHeatmapCard(
+    rows: List<PlayerPositionHeatmapRow>,
+    metric: HeatmapMetric,
+) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("All players heatmap", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "${metric.label} for every player across all positions.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            AllPlayersHeatmapTable(rows = rows)
+        }
+    }
+}
+
+@Composable
+private fun AllPlayersHeatmapTable(rows: List<PlayerPositionHeatmapRow>) {
+    val positions = com.example.soccergamemanager.domain.GameTemplateConfig.DEFAULT_POSITIONS
+    val horizontalState = rememberScrollState()
+    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            StatsHeaderCell(label = "Player", width = 132.dp)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clipToBounds(),
+            ) {
+                Row(modifier = Modifier.horizontalScroll(horizontalState)) {
+                    positions.forEach { position ->
+                        StatsHeaderCell(label = position.label, width = 104.dp)
+                    }
+                }
+            }
+        }
+        rows.forEach { row ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Surface(
+                    modifier = Modifier.width(132.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 1.dp,
+                ) {
+                    Text(
+                        text = row.label,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clipToBounds(),
+                ) {
+                    Row(modifier = Modifier.horizontalScroll(horizontalState)) {
+                        positions.forEach { position ->
+                            HeatmapCell(
+                                cell = row.cells[position] ?: PositionHeatmapCell(0.0, "0", 0f),
+                                width = 104.dp,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeatmapCell(
+    cell: PositionHeatmapCell,
+    width: androidx.compose.ui.unit.Dp = 104.dp,
+) {
+    val backgroundColor = when {
+        cell.rawValue > 0 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f + (cell.intensity * 0.55f))
+        cell.rawValue < 0 -> MaterialTheme.colorScheme.error.copy(alpha = 0.10f + (cell.intensity * 0.40f))
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    }
+    val contentColor = when {
+        cell.intensity > 0.60f && cell.rawValue >= 0 -> IceWhite
+        cell.intensity > 0.72f && cell.rawValue < 0 -> IceWhite
+        cell.rawValue < 0 -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Surface(
+        modifier = Modifier.width(width),
+        color = backgroundColor,
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 14.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = cell.displayValue,
+                color = contentColor,
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+private fun buildTeamAggregateHeatmapRow(
+    playerMetrics: List<com.example.soccergamemanager.domain.PlayerMetrics>,
+    metric: HeatmapMetric,
+): PlayerPositionHeatmapRow {
+    val positions = com.example.soccergamemanager.domain.GameTemplateConfig.DEFAULT_POSITIONS
+    val totals = positions.associateWith { position ->
+        playerMetrics.sumOf { player -> heatmapMetricValue(metric, player.positionStats[position]) }
+    }
+    val normalizer = heatmapNormalizer(metric, totals.values)
+    return PlayerPositionHeatmapRow(
+        label = "Whole team",
+        cells = positions.associateWith { position ->
+            val value = totals[position] ?: 0.0
+            PositionHeatmapCell(
+                rawValue = value,
+                displayValue = formatHeatmapValue(metric, value),
+                intensity = heatmapIntensity(metric, value, normalizer),
+            )
+        },
+    )
+}
+
+private fun buildPlayerHeatmapRow(
+    playerMetric: com.example.soccergamemanager.domain.PlayerMetrics,
+    metric: HeatmapMetric,
+): PlayerPositionHeatmapRow {
+    val positions = com.example.soccergamemanager.domain.GameTemplateConfig.DEFAULT_POSITIONS
+    val values = positions.associateWith { position ->
+        heatmapMetricValue(metric, playerMetric.positionStats[position])
+    }
+    val normalizer = heatmapNormalizer(metric, values.values)
+    return PlayerPositionHeatmapRow(
+        label = playerMetric.playerName,
+        playerId = playerMetric.playerId,
+        cells = positions.associateWith { position ->
+            val value = values[position] ?: 0.0
+            PositionHeatmapCell(
+                rawValue = value,
+                displayValue = formatHeatmapValue(metric, value),
+                intensity = heatmapIntensity(metric, value, normalizer),
+            )
+        },
+    )
+}
+
+private fun buildAllPlayersHeatmapRows(
+    playerMetrics: List<com.example.soccergamemanager.domain.PlayerMetrics>,
+    metric: HeatmapMetric,
+): List<PlayerPositionHeatmapRow> {
+    val positions = com.example.soccergamemanager.domain.GameTemplateConfig.DEFAULT_POSITIONS
+    val allValues = playerMetrics.flatMap { player ->
+        positions.map { position -> heatmapMetricValue(metric, player.positionStats[position]) }
+    }
+    val normalizer = heatmapNormalizer(metric, allValues)
+    return playerMetrics.map { player ->
+        PlayerPositionHeatmapRow(
+            label = player.playerName,
+            playerId = player.playerId,
+            cells = positions.associateWith { position ->
+                val value = heatmapMetricValue(metric, player.positionStats[position])
+                PositionHeatmapCell(
+                    rawValue = value,
+                    displayValue = formatHeatmapValue(metric, value),
+                    intensity = heatmapIntensity(metric, value, normalizer),
+                )
+            },
+        )
+    }
+}
+
+private fun heatmapMetricValue(
+    metric: HeatmapMetric,
+    positionStats: com.example.soccergamemanager.domain.PositionStatMetrics?,
+): Double {
+    val stats = positionStats ?: com.example.soccergamemanager.domain.PositionStatMetrics()
+    return when (metric) {
+        HeatmapMetric.MINUTES -> stats.minutesPlayed
+        HeatmapMetric.HALVES -> stats.halvesPlayed.toDouble()
+        HeatmapMetric.GOALS -> stats.goalsScored.toDouble()
+        HeatmapMetric.ASSISTS -> stats.assists.toDouble()
+        HeatmapMetric.DIFFERENTIAL -> stats.scoreDifferential.toDouble()
+    }
+}
+
+private fun formatHeatmapValue(metric: HeatmapMetric, value: Double): String =
+    when (metric) {
+        HeatmapMetric.MINUTES -> "%.1f".format(value)
+        HeatmapMetric.HALVES, HeatmapMetric.GOALS, HeatmapMetric.ASSISTS -> value.toInt().toString()
+        HeatmapMetric.DIFFERENTIAL -> formatDifferential(value.toInt())
+    }
+
+private fun heatmapNormalizer(metric: HeatmapMetric, values: Collection<Double>): Double {
+    if (values.isEmpty()) return 1.0
+    return when (metric) {
+        HeatmapMetric.DIFFERENTIAL -> values.maxOfOrNull { kotlin.math.abs(it) }?.coerceAtLeast(1.0) ?: 1.0
+        else -> values.maxOrNull()?.coerceAtLeast(1.0) ?: 1.0
+    }
+}
+
+private fun heatmapIntensity(metric: HeatmapMetric, value: Double, normalizer: Double): Float {
+    val base = when (metric) {
+        HeatmapMetric.DIFFERENTIAL -> kotlin.math.abs(value) / normalizer
+        else -> value / normalizer
+    }
+    return base.coerceIn(0.0, 1.0).toFloat()
 }
 
 @Composable
@@ -1791,9 +2935,13 @@ private fun HistoryScreen(
     onSelectGame: (String) -> Unit,
 ) {
     val metrics = uiState.teamMetrics
+    var selectedPreset by rememberSaveable { mutableStateOf(HistoryMetricPreset.ALL.name) }
     var selectedMetricNames by rememberSaveable {
         mutableStateOf(HistoryTableMetric.entries.map { it.name })
     }
+    var selectedPlayerId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedHeatmapMode by rememberSaveable { mutableStateOf(HeatmapMode.TEAM_AGGREGATE.name) }
+    var selectedHeatmapMetric by rememberSaveable { mutableStateOf(HeatmapMetric.MINUTES.name) }
     val selectedMetrics = HistoryTableMetric.entries.filter { it.name in selectedMetricNames }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1809,23 +2957,72 @@ private fun HistoryScreen(
         if (metrics == null || metrics.totalGames == 0) {
             item { EmptyState("Finalize a few games to unlock team metrics.") }
         } else {
+            val selectedPlayer = metrics.playerDevelopmentSnapshots.firstOrNull { it.playerId == selectedPlayerId }
+                ?: metrics.playerDevelopmentSnapshots.firstOrNull()
             item {
-                Card {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Team snapshot", style = MaterialTheme.typography.titleLarge)
-                        Text("Finalized games: ${metrics.totalGames}")
-                        Text("Goals for/against: ${metrics.teamGoals}-${metrics.opponentGoals}")
-                        metrics.goalsByHalf.toSortedMap().forEach { (half, score) ->
-                            Text("Half $half: ${score.first}-${score.second}")
-                        }
+                SeasonSnapshotCard(metrics = metrics)
+            }
+            item {
+                TrendCardsSection(metrics = metrics)
+            }
+            item {
+                SeasonFormCard(metrics = metrics)
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        HalfPerformanceCard(metrics = metrics)
+                        FairnessDashboardCard(metrics = metrics)
+                    }
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        PositionGroupSeasonCard(metrics = metrics)
+                        LightRankingsCard(metrics = metrics)
                     }
                 }
             }
             item {
+                PlayerDevelopmentSection(
+                    snapshots = metrics.playerDevelopmentSnapshots,
+                    selectedPlayerId = selectedPlayer?.playerId,
+                    onSelectPlayer = { selectedPlayerId = it },
+                )
+            }
+            if (selectedPlayer != null) {
+                item {
+                    PlayerTrendDetailCard(player = selectedPlayer)
+                }
+            }
+            item {
+                PositionHeatmapCard(
+                    playerMetrics = metrics.playerMetrics,
+                    selectedPlayerId = selectedPlayer?.playerId,
+                    selectedMode = HeatmapMode.valueOf(selectedHeatmapMode),
+                    selectedMetric = HeatmapMetric.valueOf(selectedHeatmapMetric),
+                    onSelectMode = { selectedHeatmapMode = it.name },
+                    onSelectMetric = { selectedHeatmapMetric = it.name },
+                    onSelectPlayer = { selectedPlayerId = it },
+                )
+            }
+            item {
                 Card {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Player position stats", style = MaterialTheme.typography.titleLarge)
-                        Text("Choose which metrics appear inside each position cell.")
+                        Text("Detailed position table", style = MaterialTheme.typography.titleLarge)
+                        Text("Use presets or fine-tune multiple metrics when you need the detailed table view.")
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            HistoryMetricPreset.entries.forEach { preset ->
+                                FilterChip(
+                                    selected = preset.name == selectedPreset,
+                                    onClick = {
+                                        selectedPreset = preset.name
+                                        selectedMetricNames = preset.metrics.map { it.name }
+                                    },
+                                    label = { Text(preset.label) },
+                                )
+                            }
+                        }
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1839,6 +3036,7 @@ private fun HistoryScreen(
                                         } else {
                                             selectedMetricNames + metric.name
                                         }
+                                        selectedPreset = ""
                                     },
                                     label = { Text(metric.label) },
                                 )
@@ -1856,9 +3054,9 @@ private fun HistoryScreen(
                 }
             }
         }
-        item {
-            Text("Game archive", style = MaterialTheme.typography.titleLarge)
-        }
+            item {
+                Text("Game archive", style = MaterialTheme.typography.titleLarge)
+            }
         items(uiState.games.filter { it.status == GameStatus.FINAL }, key = { it.gameId }) { game ->
             Card(
                 modifier = Modifier
@@ -1883,16 +3081,848 @@ private fun HistoryScreen(
 }
 
 @Composable
+private fun SeasonSnapshotCard(metrics: com.example.soccergamemanager.domain.TeamMetrics) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Season snapshot", style = MaterialTheme.typography.titleLarge)
+            BoxWithConstraints {
+                val compact = maxWidth < 840.dp
+                if (compact) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SnapshotMetricRow("Record", "${metrics.wins}-${metrics.draws}-${metrics.losses}")
+                        SnapshotMetricRow("Goals", "${metrics.teamGoals}-${metrics.opponentGoals}")
+                        SnapshotMetricRow("Average diff", formatSignedDecimal(metrics.averageGoalDifferential))
+                        SnapshotMetricRow("Strongest half", metrics.strongestHalf?.let { "Half $it" } ?: "None")
+                        SnapshotMetricRow("Assists", metrics.totalAssists.toString())
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SnapshotMetricCard("Record", "${metrics.wins}-${metrics.draws}-${metrics.losses}", Modifier.weight(1f))
+                        SnapshotMetricCard("Goals", "${metrics.teamGoals}-${metrics.opponentGoals}", Modifier.weight(1f))
+                        SnapshotMetricCard("Avg diff", formatSignedDecimal(metrics.averageGoalDifferential), Modifier.weight(1f))
+                        SnapshotMetricCard("Strongest half", metrics.strongestHalf?.let { "Half $it" } ?: "None", Modifier.weight(1f))
+                        SnapshotMetricCard("Assists", metrics.totalAssists.toString(), Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrendCardsSection(metrics: com.example.soccergamemanager.domain.TeamMetrics) {
+    val diffTrend = metrics.gameTrendPoints.map { it.differential.toDouble() }
+    val goalsForTrend = metrics.gameTrendPoints.map { it.teamGoals.toDouble() }
+    val goalsAgainstTrend = metrics.gameTrendPoints.map { it.opponentGoals.toDouble() }
+    val minutesBalanceTrend = metrics.gameTrendPoints.map { it.minutesBalanceScore.toDouble() }
+    val keeperBalanceTrend = metrics.gameTrendPoints.map { it.keeperBalanceScore.toDouble() }
+    val trendLabels = metrics.gameTrendPoints.map { it.dateLabel.substringBefore(" vs") }
+    BoxWithConstraints {
+        val compact = maxWidth < 900.dp
+        if (compact) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                MiniTrendCard(
+                    title = "Score differential trend",
+                    values = diffTrend,
+                    labels = trendLabels,
+                    highlight = formatDifferential(diffTrend.lastOrNull()?.toInt() ?: 0),
+                    explanation = "The value is your team's goals minus the opponent's goals for that game. Positive bars mean your team outscored the opponent.",
+                    valueFormatter = { formatDifferential(it.toInt()) },
+                )
+                MiniTrendCard(
+                    title = "Goals for",
+                    values = goalsForTrend,
+                    labels = trendLabels,
+                    highlight = goalsForTrend.lastOrNull()?.toInt()?.toString() ?: "0",
+                    explanation = "The value is the number of goals your team scored in that game.",
+                    valueFormatter = { it.toInt().toString() },
+                )
+                MiniTrendCard(
+                    title = "Goals against",
+                    values = goalsAgainstTrend,
+                    labels = trendLabels,
+                    highlight = goalsAgainstTrend.lastOrNull()?.toInt()?.toString() ?: "0",
+                    explanation = "The value is the number of goals allowed in that game.",
+                    valueFormatter = { it.toInt().toString() },
+                )
+                MiniTrendCard(
+                    title = "Playing-time balance",
+                    values = minutesBalanceTrend,
+                    labels = trendLabels,
+                    highlight = "${metrics.fairnessSummary.minutesBalanceScore}",
+                    explanation = "This 0-100 score tracks season-to-date playing-time fairness after each finalized game. It compares each player's cumulative minutes across the season so far. Higher scores mean total minutes have been shared more evenly across the roster.",
+                    valueFormatter = { it.toInt().toString() },
+                )
+                MiniTrendCard(
+                    title = "Keeper balance",
+                    values = keeperBalanceTrend,
+                    labels = trendLabels,
+                    highlight = "${metrics.fairnessSummary.keeperBalanceScore}",
+                    explanation = "This 0-100 score tracks season-to-date goalkeeper fairness after each finalized game. It compares cumulative keeper assignments across the season so far. Higher scores mean keeper duties have been shared more evenly across the roster.",
+                    valueFormatter = { it.toInt().toString() },
+                )
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    MiniTrendCard(
+                        title = "Score differential trend",
+                        values = diffTrend,
+                        labels = trendLabels,
+                        highlight = formatDifferential(diffTrend.lastOrNull()?.toInt() ?: 0),
+                        explanation = "The value is your team's goals minus the opponent's goals for that game. Positive bars mean your team outscored the opponent.",
+                        valueFormatter = { formatDifferential(it.toInt()) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    MiniTrendCard(
+                        title = "Goals for",
+                        values = goalsForTrend,
+                        labels = trendLabels,
+                        highlight = goalsForTrend.lastOrNull()?.toInt()?.toString() ?: "0",
+                        explanation = "The value is the number of goals your team scored in that game.",
+                        valueFormatter = { it.toInt().toString() },
+                        modifier = Modifier.weight(1f),
+                    )
+                    MiniTrendCard(
+                        title = "Goals against",
+                        values = goalsAgainstTrend,
+                        labels = trendLabels,
+                        highlight = goalsAgainstTrend.lastOrNull()?.toInt()?.toString() ?: "0",
+                        explanation = "The value is the number of goals allowed in that game.",
+                        valueFormatter = { it.toInt().toString() },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    MiniTrendCard(
+                        title = "Playing-time balance",
+                        values = minutesBalanceTrend,
+                        labels = trendLabels,
+                        highlight = "${metrics.fairnessSummary.minutesBalanceScore}",
+                        explanation = "This 0-100 score tracks season-to-date playing-time fairness after each finalized game. It compares each player's cumulative minutes across the season so far. Higher scores mean total minutes have been shared more evenly across the roster.",
+                        valueFormatter = { it.toInt().toString() },
+                        modifier = Modifier.weight(1f),
+                    )
+                    MiniTrendCard(
+                        title = "Keeper balance",
+                        values = keeperBalanceTrend,
+                        labels = trendLabels,
+                        highlight = "${metrics.fairnessSummary.keeperBalanceScore}",
+                        explanation = "This 0-100 score tracks season-to-date goalkeeper fairness after each finalized game. It compares cumulative keeper assignments across the season so far. Higher scores mean keeper duties have been shared more evenly across the roster.",
+                        valueFormatter = { it.toInt().toString() },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SeasonFormCard(metrics: com.example.soccergamemanager.domain.TeamMetrics) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Season form", style = MaterialTheme.typography.titleLarge)
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                metrics.gameTrendPoints.forEach { point ->
+                    Surface(
+                        color = when {
+                            point.differential > 0 -> MaterialTheme.colorScheme.primaryContainer
+                            point.differential < 0 -> MaterialTheme.colorScheme.errorContainer
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        shape = MaterialTheme.shapes.large,
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(point.resultLabel, style = MaterialTheme.typography.titleLarge)
+                            Text(point.dateLabel, style = MaterialTheme.typography.labelMedium)
+                            Text("${point.teamGoals}-${point.opponentGoals}")
+                            Text(point.opponent, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HalfPerformanceCard(metrics: com.example.soccergamemanager.domain.TeamMetrics) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Half performance", style = MaterialTheme.typography.titleLarge)
+            metrics.goalsByHalf.toSortedMap().forEach { (half, score) ->
+                val total = (score.first + score.second).coerceAtLeast(1)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Half $half")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${score.first}-${score.second}", modifier = Modifier.width(72.dp))
+                        Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(score.first.toFloat().coerceAtLeast(0.5f))
+                                    .height(10.dp)
+                                    .clip(MaterialTheme.shapes.small)
+                                    .background(MaterialTheme.colorScheme.primary),
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .weight(score.second.toFloat().coerceAtLeast(0.5f))
+                                    .height(10.dp)
+                                    .clip(MaterialTheme.shapes.small)
+                                    .background(MaterialTheme.colorScheme.error.copy(alpha = 0.65f)),
+                            )
+                        }
+                    }
+                    Text("Differential ${formatDifferential(score.first - score.second)}", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PositionGroupSeasonCard(metrics: com.example.soccergamemanager.domain.TeamMetrics) {
+    val maxMinutes = metrics.positionGroupSummaries.maxOfOrNull { it.totalMinutes }?.coerceAtLeast(1.0) ?: 1.0
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Position group season view", style = MaterialTheme.typography.titleLarge)
+            metrics.positionGroupSummaries.forEach { summary ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(summary.positionGroup.label)
+                        Text("${"%.1f".format(summary.totalMinutes)} min")
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(10.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .fillMaxWidth((summary.totalMinutes / maxMinutes).toFloat()),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.primary),
+                            )
+                        }
+                    }
+                    Text(
+                        "${summary.goalContributions} contributions • Diff ${formatDifferential(summary.totalDifferential)} • ${summary.uniquePlayers} players",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FairnessDashboardCard(metrics: com.example.soccergamemanager.domain.TeamMetrics) {
+    val playerLookup = metrics.playerDevelopmentSnapshots.associateBy({ it.playerId }, { it.playerName })
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Fairness dashboard", style = MaterialTheme.typography.titleLarge)
+            SnapshotMetricRow("Minutes balance", "${metrics.fairnessSummary.minutesBalanceScore}/100")
+            SnapshotMetricRow("Group exposure balance", "${metrics.fairnessSummary.groupExposureBalanceScore}/100")
+            SnapshotMetricRow("Keeper balance", "${metrics.fairnessSummary.keeperBalanceScore}/100")
+            if (metrics.fairnessSummary.overusedPlayerIds.isNotEmpty()) {
+                Text(
+                    "Higher-use players: ${
+                        metrics.fairnessSummary.overusedPlayerIds.mapNotNull { playerLookup[it] }.joinToString()
+                    }",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (metrics.fairnessSummary.underusedPlayerIds.isNotEmpty()) {
+                Text(
+                    "Lower-use players: ${
+                        metrics.fairnessSummary.underusedPlayerIds.mapNotNull { playerLookup[it] }.joinToString()
+                    }",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LightRankingsCard(metrics: com.example.soccergamemanager.domain.TeamMetrics) {
+    val topGoals = metrics.playerMetrics.sortedByDescending { it.totalGoalsScored }.take(3)
+    val topAssists = metrics.playerMetrics.sortedByDescending { it.totalAssists }.take(3)
+    val topMinutes = metrics.playerMetrics.sortedByDescending { it.totalMinutes }.take(3)
+    val topDiff = metrics.playerMetrics.sortedByDescending { it.scoreDifferentialWhileAssigned }.take(3)
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Light rankings", style = MaterialTheme.typography.titleLarge)
+            RankingBlock("Goals", topGoals.map { "${it.playerName} ${it.totalGoalsScored}" })
+            RankingBlock("Assists", topAssists.map { "${it.playerName} ${it.totalAssists}" })
+            RankingBlock("Minutes", topMinutes.map { "${it.playerName} ${"%.1f".format(it.totalMinutes)}" })
+            RankingBlock("Differential", topDiff.map { "${it.playerName} ${formatDifferential(it.scoreDifferentialWhileAssigned)}" })
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PlayerDevelopmentSection(
+    snapshots: List<com.example.soccergamemanager.domain.PlayerDevelopmentSnapshot>,
+    selectedPlayerId: String?,
+    onSelectPlayer: (String) -> Unit,
+) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Player development", style = MaterialTheme.typography.titleLarge)
+            BoxWithConstraints {
+                val useTwoRows = maxWidth >= 840.dp && snapshots.size > 2
+                if (useTwoRows) {
+                    val splitIndex = (snapshots.size + 1) / 2
+                    val rows = listOf(
+                        snapshots.take(splitIndex),
+                        snapshots.drop(splitIndex),
+                    ).filter { it.isNotEmpty() }
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        rows.forEach { rowSnapshots ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                rowSnapshots.forEach { snapshot ->
+                                    PlayerDevelopmentCard(
+                                        snapshot = snapshot,
+                                        selected = snapshot.playerId == selectedPlayerId,
+                                        onSelect = onSelectPlayer,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        snapshots.forEach { snapshot ->
+                            PlayerDevelopmentCard(
+                                snapshot = snapshot,
+                                selected = snapshot.playerId == selectedPlayerId,
+                                onSelect = onSelectPlayer,
+                                modifier = Modifier.width(180.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerDevelopmentCard(
+    snapshot: com.example.soccergamemanager.domain.PlayerDevelopmentSnapshot,
+    selected: Boolean,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.clickable { onSelect(snapshot.playerId) },
+        color = if (selected) MaterialTheme.colorScheme.primary else IceWhite,
+        contentColor = if (selected) IceWhite else MaterialTheme.colorScheme.primary,
+        border = if (selected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+        shape = MaterialTheme.shapes.large,
+        tonalElevation = if (selected) 0.dp else 2.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(snapshot.playerName, fontWeight = FontWeight.SemiBold)
+            Text("${"%.1f".format(snapshot.totalMinutes)} min")
+            Text("${snapshot.totalGoals}G • ${snapshot.totalAssists}A")
+            Text("${snapshot.uniquePositions} positions • ${snapshot.uniqueGroups} groups", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun PlayerTrendDetailCard(player: com.example.soccergamemanager.domain.PlayerDevelopmentSnapshot) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("${player.playerName} trends", style = MaterialTheme.typography.titleLarge)
+            SnapshotMetricRow("Position variety", "${player.positionVarietyScore}/100")
+            SnapshotMetricRow("Group variety", "${player.groupVarietyScore}/100")
+            player.trendPoints.forEach { point ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(point.label, style = MaterialTheme.typography.labelLarge)
+                        Text("${"%.1f".format(point.minutes)} min")
+                    }
+                    Text(
+                        "${point.goals}G • ${point.assists}A • Diff ${formatDifferential(point.differential)} • ${point.uniquePositions} pos / ${point.uniqueGroups} groups",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MatchSummaryHeroCard(analytics: com.example.soccergamemanager.domain.MatchReportAnalytics) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Match report dashboard", style = MaterialTheme.typography.titleLarge)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(analytics.opponent, style = MaterialTheme.typography.headlineSmall)
+                    Text("${analytics.dateLabel} • ${analytics.location}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(
+                    "${analytics.teamGoals} - ${analytics.opponentGoals}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                analytics.halfScores.forEach { half ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = MaterialTheme.shapes.large,
+                    ) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Text("Half ${half.halfNumber}", style = MaterialTheme.typography.labelMedium)
+                            Text("${half.teamGoals}-${half.opponentGoals}", style = MaterialTheme.typography.titleLarge)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MatchTimelineCard(analytics: com.example.soccergamemanager.domain.MatchReportAnalytics) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("Game flow timeline", style = MaterialTheme.typography.titleLarge)
+            analytics.halfScores.forEach { half ->
+                val halfEvents = analytics.timelineEvents.filter { it.halfNumber == half.halfNumber }
+                MatchHalfTimeline(
+                    halfNumber = half.halfNumber,
+                    events = halfEvents,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MatchHalfTimeline(
+    halfNumber: Int,
+    events: List<com.example.soccergamemanager.domain.MatchTimelineEvent>,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val timelineWidth = maxWidth
+        val halfDuration = (events.maxOfOrNull { it.elapsedSecondsInHalf } ?: 1).coerceAtLeast(1)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Half $halfNumber", style = MaterialTheme.typography.labelLarge)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(MaterialTheme.colorScheme.outlineVariant),
+                )
+                events.forEach { event ->
+                    val fraction = (event.elapsedSecondsInHalf.toFloat() / halfDuration.toFloat()).coerceIn(0f, 1f)
+                    val markerColor = when (event.kind) {
+                        com.example.soccergamemanager.domain.MatchTimelineKind.TEAM_GOAL -> MaterialTheme.colorScheme.primary
+                        com.example.soccergamemanager.domain.MatchTimelineKind.OPPONENT_GOAL -> MaterialTheme.colorScheme.error
+                        com.example.soccergamemanager.domain.MatchTimelineKind.SUB_ROUND -> MaterialTheme.colorScheme.tertiary
+                        else -> MaterialTheme.colorScheme.outline
+                    }
+                    Box(
+                        modifier = Modifier
+                            .offset(x = (timelineWidth * fraction) - 6.dp, y = 2.dp)
+                            .size(if (event.kind == com.example.soccergamemanager.domain.MatchTimelineKind.SUB_ROUND) 8.dp else 12.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(markerColor),
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                events.filter {
+                    it.kind == com.example.soccergamemanager.domain.MatchTimelineKind.TEAM_GOAL ||
+                        it.kind == com.example.soccergamemanager.domain.MatchTimelineKind.OPPONENT_GOAL
+                }.forEach { event ->
+                    Surface(
+                        color = if (event.kind == com.example.soccergamemanager.domain.MatchTimelineKind.TEAM_GOAL) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.errorContainer
+                        },
+                        shape = MaterialTheme.shapes.medium,
+                    ) {
+                        Text(
+                            "${formatClock(event.elapsedSecondsInHalf)} ${event.label}",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoundImpactCard(analytics: com.example.soccergamemanager.domain.MatchReportAnalytics) {
+    val strongestRound = analytics.roundImpactSummaries.maxByOrNull { it.differential * 100 + it.goalsFor }
+    val toughestRound = analytics.roundImpactSummaries.minByOrNull { it.differential * 100 - it.goalsAgainst }
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Lineup impact summary", style = MaterialTheme.typography.titleLarge)
+            strongestRound?.let {
+                Text("Best stretch: Half ${it.halfNumber}, round ${it.roundIndex} (${formatDifferential(it.differential)})")
+            }
+            toughestRound?.let {
+                Text("Most difficult stretch: Half ${it.halfNumber}, round ${it.roundIndex} (${formatDifferential(it.differential)})")
+            }
+            analytics.roundImpactSummaries.forEach { summary ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("H${summary.halfNumber} R${summary.roundIndex}", modifier = Modifier.width(70.dp))
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(10.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(
+                                when {
+                                    summary.differential > 0 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                                    summary.differential < 0 -> MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                                    else -> MaterialTheme.colorScheme.surfaceVariant
+                                },
+                            ),
+                    )
+                    Text(
+                        "${summary.goalsFor}-${summary.goalsAgainst}",
+                        modifier = Modifier.width(56.dp),
+                        textAlign = TextAlign.End,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PositionGroupMatchCard(analytics: com.example.soccergamemanager.domain.MatchReportAnalytics) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Position group performance", style = MaterialTheme.typography.titleLarge)
+            analytics.positionGroupSummaries.forEach { summary ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    shape = MaterialTheme.shapes.large,
+                ) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(summary.positionGroup.label, style = MaterialTheme.typography.titleMedium)
+                        Text("${"%.1f".format(summary.totalMinutes)} min • ${summary.goalContributions} contributions")
+                        Text("${summary.goalsFor}-${summary.goalsAgainst} • Diff ${formatDifferential(summary.differential)}")
+                        Text(summary.playersUsed.joinToString(), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerUsageCard(analytics: com.example.soccergamemanager.domain.MatchReportAnalytics) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Player usage summary", style = MaterialTheme.typography.titleLarge)
+            analytics.playerUsage.forEach { usage ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f),
+                    shape = MaterialTheme.shapes.medium,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(usage.playerName, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "${usage.goals}G • ${usage.assists}A • ${usage.positions.joinToString { it.label }}",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("${"%.1f".format(usage.minutes)} min")
+                            Text(
+                                "${if (usage.fairnessDeltaMinutes > 0) "+" else ""}${"%.1f".format(usage.fairnessDeltaMinutes)} vs norm",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (usage.fairnessDeltaMinutes >= 0) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MatchTakeawaysCard(analytics: com.example.soccergamemanager.domain.MatchReportAnalytics) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Coach takeaways", style = MaterialTheme.typography.titleLarge)
+            if (analytics.takeaways.isEmpty()) {
+                Text("No standout takeaways yet.")
+            } else {
+                analytics.takeaways.forEach { takeaway ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                        shape = MaterialTheme.shapes.large,
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(takeaway.title, style = MaterialTheme.typography.titleMedium)
+                            Text(takeaway.body)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SnapshotMetricCard(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(label, style = MaterialTheme.typography.labelMedium)
+            Text(value, style = MaterialTheme.typography.titleLarge)
+        }
+    }
+}
+
+@Composable
+private fun SnapshotMetricRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label)
+        Text(value, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun MiniTrendCard(
+    title: String,
+    values: List<Double>,
+    labels: List<String>,
+    highlight: String,
+    explanation: String,
+    valueFormatter: (Double) -> String,
+    modifier: Modifier = Modifier,
+) {
+    var showInfo by remember { mutableStateOf(false) }
+    Card(modifier = modifier) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                IconButton(onClick = { showInfo = true }, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        imageVector = Icons.Outlined.Info,
+                        contentDescription = "Explain $title",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            Text(highlight, style = MaterialTheme.typography.headlineSmall)
+            MiniBarStrip(values = values, labels = labels, valueFormatter = valueFormatter)
+        }
+    }
+    if (showInfo) {
+        AlertDialog(
+            onDismissRequest = { showInfo = false },
+            confirmButton = {
+                TextButton(onClick = { showInfo = false }) {
+                    Text("Close")
+                }
+            },
+            title = { Text(title) },
+            text = {
+                Text(
+                    "$explanation\n\nChart layout: each bar represents one finalized game, ordered from oldest to newest."
+                )
+            },
+        )
+    }
+}
+
+@Composable
+private fun MiniBarStrip(
+    values: List<Double>,
+    labels: List<String>,
+    valueFormatter: (Double) -> String,
+) {
+    if (values.isEmpty()) {
+        Text("No data yet.", style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    val recentValues = values.takeLast(8)
+    val recentLabels = labels.takeLast(recentValues.size).map {
+        it.replace("Sept", "Sep")
+            .replace("April", "Apr")
+            .replace("March", "Mar")
+            .replace("February", "Feb")
+            .replace("January", "Jan")
+            .replace("August", "Aug")
+            .replace("October", "Oct")
+            .replace("November", "Nov")
+            .replace("December", "Dec")
+    }
+    val maxMagnitude = recentValues.maxOfOrNull { kotlin.math.abs(it) }?.coerceAtLeast(1.0) ?: 1.0
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(72.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            recentValues.forEach { value ->
+                val fraction = (kotlin.math.abs(value) / maxMagnitude).toFloat().coerceIn(0.12f, 1f)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    verticalArrangement = Arrangement.Bottom,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = valueFormatter(value),
+                        style = MaterialTheme.typography.labelSmall,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .fillMaxWidth()
+                            .height(44.dp),
+                        contentAlignment = Alignment.BottomCenter,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp * fraction)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(
+                                    when {
+                                        value > 0 -> MaterialTheme.colorScheme.primary
+                                        value < 0 -> MaterialTheme.colorScheme.error.copy(alpha = 0.75f)
+                                        else -> MaterialTheme.colorScheme.outlineVariant
+                                    },
+                                ),
+                        )
+                    }
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            recentLabels.forEach { label ->
+                Text(
+                    text = label,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RankingBlock(title: String, rows: List<String>) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, style = MaterialTheme.typography.labelLarge)
+        rows.forEach { row ->
+            Text(row, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
 private fun ReportsScreen(
     uiState: AppUiState,
+    onSelectGame: (String) -> Unit,
     onRefresh: () -> Unit,
+    showHeader: Boolean = true,
+    showGamePicker: Boolean = true,
 ) {
     val context = LocalContext.current
     val report = uiState.report
-    if (uiState.selectedGameDetail == null) {
-        EmptyState("Select a game from the Games tab to view and print its one-page report.")
-        return
-    }
+    val analytics = report?.analytics
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1900,25 +3930,82 @@ private fun ReportsScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        ScreenHeader(
-            title = "Report & Print",
-            subtitle = "Single-page lineup sheet with halves, rounds, and score boxes.",
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onRefresh) { Text("Refresh") }
-            OutlinedButton(onClick = { report?.let { printReport(context, it) } }, enabled = report != null) {
-                Text("Print / Save PDF")
+        if (showHeader) {
+            ScreenHeader(
+                title = "Report & Print",
+                subtitle = "Single-page lineup sheet with halves, rounds, and score boxes.",
+            )
+        }
+        if (showGamePicker) {
+            Card {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Game reports", style = MaterialTheme.typography.titleLarge)
+                    if (uiState.games.isEmpty()) {
+                        Text("Create a game to unlock reports.")
+                    } else {
+                        uiState.games.forEach { game ->
+                            OutlinedButton(
+                                onClick = { onSelectGame(game.gameId) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(game.opponent)
+                                    Text(formatDate(game.scheduledAt))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
-        if (report == null) {
-            EmptyState("No report available yet.")
+        if (uiState.selectedGameDetail == null) {
+            EmptyState("Select a game to preview and print its report.")
         } else {
-            Card {
-                Text(
-                    report.plainText,
-                    modifier = Modifier.padding(16.dp),
-                    fontFamily = FontFamily.Monospace,
-                )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onRefresh) { Text("Refresh") }
+                OutlinedButton(onClick = { report?.let { printReport(context, it) } }, enabled = report != null) {
+                    Text("Print / Save PDF")
+                }
+            }
+            if (report == null || analytics == null) {
+                EmptyState("No report available yet.")
+            } else {
+                MatchSummaryHeroCard(analytics = analytics)
+                MatchTimelineCard(analytics = analytics)
+                BoxWithConstraints {
+                    if (maxWidth > 880.dp) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                RoundImpactCard(analytics = analytics)
+                                MatchTakeawaysCard(analytics = analytics)
+                            }
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                PositionGroupMatchCard(analytics = analytics)
+                                PlayerUsageCard(analytics = analytics)
+                            }
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            RoundImpactCard(analytics = analytics)
+                            PositionGroupMatchCard(analytics = analytics)
+                            PlayerUsageCard(analytics = analytics)
+                            MatchTakeawaysCard(analytics = analytics)
+                        }
+                    }
+                }
+                Card {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Printable summary preview", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            report.plainText,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
             }
         }
     }
@@ -1982,6 +4069,28 @@ private fun ScreenHeader(title: String, subtitle: String) {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CompactScreenHeader(title: String, subtitle: String) {
+    Card {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.headlineSmall,
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -2116,6 +4225,7 @@ private fun ManualLocksCard(
     playerLookup: Map<String, String>,
     locksByGroup: Map<Pair<Int, PositionGroup>, List<String>>,
     onEditGroup: (PositionGroup) -> Unit,
+    editable: Boolean,
 ) {
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -2143,7 +4253,7 @@ private fun ManualLocksCard(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(group.label, style = MaterialTheme.typography.titleLarge)
-                            TextButton(onClick = { onEditGroup(group) }) {
+                            TextButton(onClick = { onEditGroup(group) }, enabled = editable) {
                                 Text("Edit")
                             }
                         }
@@ -2159,7 +4269,7 @@ private fun ManualLocksCard(
                             ) {
                                 names.forEach { name ->
                                     ElevatedAssistChip(
-                                        onClick = { onEditGroup(group) },
+                                        onClick = { if (editable) onEditGroup(group) },
                                         label = { Text(name) },
                                     )
                                 }
@@ -2215,6 +4325,11 @@ private fun formatClock(totalSeconds: Int): String {
 }
 
 private fun formatDifferential(value: Int): String = if (value > 0) "+$value" else value.toString()
+
+private fun formatSignedDecimal(value: Double): String {
+    val rounded = "%.1f".format(value)
+    return if (value > 0) "+$rounded" else rounded
+}
 
 private fun formatSignedClock(totalSeconds: Int): String {
     return if (totalSeconds >= 0) {
