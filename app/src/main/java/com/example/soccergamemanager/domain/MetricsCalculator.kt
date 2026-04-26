@@ -217,6 +217,24 @@ class MetricsCalculator {
 
         val fairnessSummary = buildFairnessSummary(playerMetrics)
         val strongestHalf = goalsByHalf.maxByOrNull { (_, score) -> score.first - score.second }?.key
+        val recentGoalieGame = sortedGames.lastOrNull()?.let { recentGame ->
+            val recentAssignments = assignments.filter { it.gameId == recentGame.gameId }
+            RecentGoalieGameSummary(
+                gameId = recentGame.gameId,
+                opponent = recentGame.opponent,
+                dateLabel = shortGameLabel(recentGame),
+                halfGoalies = recentAssignments
+                    .filter { it.position == FieldPosition.GOALIE && it.roundIndex == 1 }
+                    .sortedBy { it.halfNumber }
+                    .map { assignment ->
+                        RecentGoalieHalfSummary(
+                            halfNumber = assignment.halfNumber,
+                            playerId = assignment.playerId,
+                            playerName = playerById[assignment.playerId]?.name ?: "Unknown",
+                        )
+                    },
+            )
+        }
 
         return TeamMetrics(
             totalGames = sortedGames.size,
@@ -248,6 +266,7 @@ class MetricsCalculator {
             },
             fairnessSummary = fairnessSummary,
             playerDevelopmentSnapshots = playerDevelopmentSnapshots.sortedBy { it.playerName },
+            recentGoalieGame = recentGoalieGame,
         )
     }
 

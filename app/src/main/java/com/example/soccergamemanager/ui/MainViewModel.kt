@@ -333,6 +333,26 @@ class MainViewModel(
         }
     }
 
+    fun deleteGame(game: GameEntity) {
+        launchTask {
+            val deletingSelectedGame = selectedGameId.value == game.gameId
+            repository.deleteGame(game)
+            if (deletingSelectedGame) {
+                selectedGameId.value = null
+                report.value = null
+                clockRunning.value = false
+                halfElapsedOverride.value = null
+                roundElapsedOverride.value = null
+                clockJob?.cancel()
+            }
+            refreshMetrics()
+            if (!deletingSelectedGame) {
+                refreshReport()
+            }
+            message.value = "Game deleted."
+        }
+    }
+
     fun selectGame(gameId: String) {
         selectedGameId.value = gameId
     }

@@ -269,6 +269,7 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                         uiState = uiState,
                         onCreateGame = viewModel::createGame,
                         onUpdateGame = viewModel::updateGameDetails,
+                        onDeleteGame = viewModel::deleteGame,
                         onOpenGameHub = { gameId, initialTab ->
                             viewModel.selectGame(gameId)
                             navController.navigate(GameHubRoute.create(gameId, initialTab))
@@ -606,6 +607,7 @@ private fun GamesScreen(
     uiState: AppUiState,
     onCreateGame: (String, String, Long) -> Unit,
     onUpdateGame: (GameEntity, String, String, Long) -> Unit,
+    onDeleteGame: (GameEntity) -> Unit,
     onOpenGameHub: (String, GameHubTab) -> Unit,
     onOpenReports: (String) -> Unit,
 ) {
@@ -614,7 +616,9 @@ private fun GamesScreen(
     var location by rememberSaveable { mutableStateOf("") }
     var scheduledAtMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
     var editingGameId by rememberSaveable { mutableStateOf<String?>(null) }
+    var confirmingDeleteGameId by rememberSaveable { mutableStateOf<String?>(null) }
     val editingGame = uiState.games.firstOrNull { it.gameId == editingGameId }
+    val deletingGame = uiState.games.firstOrNull { it.gameId == confirmingDeleteGameId }
     val now = remember(uiState.games) { ZonedDateTime.now() }
     val liveGame = uiState.games.firstOrNull { uiState.workflowStatus(it) == GameWorkflowStatus.LIVE }
     val focusGame = uiState.games
@@ -666,7 +670,47 @@ private fun GamesScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { editingGameId = null }) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = {
+                            editingGameId = null
+                            confirmingDeleteGameId = game.gameId
+                        },
+                    ) {
+                        Text("Delete game")
+                    }
+                    TextButton(onClick = { editingGameId = null }) {
+                        Text("Cancel")
+                    }
+                }
+            },
+        )
+    }
+
+    deletingGame?.let { game ->
+        AlertDialog(
+            onDismissRequest = { confirmingDeleteGameId = null },
+            title = { Text("Delete game?") },
+            text = {
+                Text(
+                    "Delete ${game.opponent} on ${formatDate(game.scheduledAt)}? This removes the game and all related lineup, live, scoring, and report data.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteGame(game)
+                        confirmingDeleteGameId = null
+                        if (editingGameId == game.gameId) {
+                            editingGameId = null
+                        }
+                    },
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingDeleteGameId = null }) {
                     Text("Cancel")
                 }
             },
@@ -803,6 +847,9 @@ private fun GamesScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { editingGameId = game.gameId }) {
                             Text("Edit game")
+                        }
+                        TextButton(onClick = { confirmingDeleteGameId = game.gameId }) {
+                            Text("Delete")
                         }
                         TextButton(onClick = { onOpenGameHub(game.gameId, defaultHubTabFor(uiState, game)) }) {
                             Text("Open hub")
@@ -1335,6 +1382,12 @@ private fun PlannerScreen(
                     }
                 }
             }
+        }
+        item {
+            GoalieRotationPlannerCard(
+                detail = detail,
+                seasonMetrics = uiState.teamMetrics,
+            )
         }
         item {
             Card {
@@ -4266,6 +4319,286 @@ private fun CompactScreenHeader(title: String, subtitle: String) {
 private fun EmptyState(message: String) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(message, textAlign = TextAlign.Center, modifier = Modifier.padding(24.dp))
+    }
+}
+
+@Composable
+private fun GoalieRotationPlannerCard(
+    detail: GameDetail,
+    seasonMetrics: com.example.soccergamemanager.domain.TeamMetrics?,
+) {
+    val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
+    val availabilityByPlayer = detail.availability.associateBy { it.playerId }
+    val currentGoaliePlan = (1..detail.game.template().halfCount).associateWith { halfNumber ->
+        detail.assignments
+            .firstOrNull { it.halfNumber == halfNumber && it.position == FieldPosition.GOALIE && it.roundIndex == 1 }
+            ?.playerId
+            ?.let(playerLookup::get)
+            ?: detail.game.manualGroupLocks()
+                .firstOrNull { it.halfNumber == halfNumber && it.positionGroup == PositionGroup.GOALIE }
+                ?.playerIds
+                ?.firstOrNull()
+                ?.let(playerLookup::get)
+            ?: "Not set"
+    }
+    val recentGoalieGame = seasonMetrics?.recentGoalieGame
+    val recentGoalieIds = recentGoalieGame?.halfGoalies?.map { it.playerId }?.toSet().orEmpty()
+    val keeperCounts = seasonMetrics?.playerMetrics
+        ?.associateBy({ it.playerId }, { it.keeperCount })
+        .orEmpty()
+    val suggestedGoalies = detail.players
+        .filter { player ->
+            player.active &&
+                player.preferredKeeper &&
+                ((availabilityByPlayer[player.playerId]?.availableFirstHalf != false) ||
+                    (availabilityByPlayer[player.playerId]?.availableSecondHalf != false))
+        }
+        .sortedWith(
+            compareBy<PlayerEntity>(
+                { if (it.playerId in recentGoalieIds) 1 else 0 },
+                { keeperCounts[it.playerId] ?: 0 },
+                { it.name },
+            ),
+        )
+        .take(3)
+
+    Card {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Goalie rotation", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        "See who played last game and who still needs turns this season.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = MaterialTheme.shapes.large,
+                ) {
+                    Text(
+                        text = "Keeper balance ${seasonMetrics?.fairnessSummary?.keeperBalanceScore ?: 100}/100",
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            }
+            BoxWithConstraints {
+                if (maxWidth > 940.dp) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            PlannerGoalieSnapshotCard(
+                                title = "Last game",
+                                subtitle = recentGoalieGame?.let { "${it.opponent} • ${it.dateLabel}" } ?: "No completed games yet",
+                                rows = if (recentGoalieGame == null) {
+                                    listOf("No goalie history yet.")
+                                } else {
+                                    recentGoalieGame.halfGoalies.map { "Half ${it.halfNumber}: ${it.playerName}" }
+                                },
+                            )
+                            PlannerGoalieSnapshotCard(
+                                title = "This game plan",
+                                subtitle = "Current goalie plan for each half",
+                                rows = currentGoaliePlan.map { (halfNumber, goalieName) ->
+                                    "Half $halfNumber: $goalieName"
+                                },
+                            )
+                            if (suggestedGoalies.isNotEmpty()) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                    shape = MaterialTheme.shapes.medium,
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        Text("Suggested next goalie options", style = MaterialTheme.typography.labelLarge)
+                                        Text(
+                                            suggestedGoalies.joinToString { player ->
+                                                "${player.name} (${keeperCounts[player.playerId] ?: 0} halves)"
+                                            },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        PlannerGoalieBreakdownCard(
+                            modifier = Modifier.weight(1.15f),
+                            players = detail.players,
+                            keeperCounts = keeperCounts,
+                        )
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        PlannerGoalieSnapshotCard(
+                            title = "Last game",
+                            subtitle = recentGoalieGame?.let { "${it.opponent} • ${it.dateLabel}" } ?: "No completed games yet",
+                            rows = if (recentGoalieGame == null) {
+                                listOf("No goalie history yet.")
+                            } else {
+                                recentGoalieGame.halfGoalies.map { "Half ${it.halfNumber}: ${it.playerName}" }
+                            },
+                        )
+                        PlannerGoalieSnapshotCard(
+                            title = "This game plan",
+                            subtitle = "Current goalie plan for each half",
+                            rows = currentGoaliePlan.map { (halfNumber, goalieName) ->
+                                "Half $halfNumber: $goalieName"
+                            },
+                        )
+                        if (suggestedGoalies.isNotEmpty()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                shape = MaterialTheme.shapes.medium,
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Text("Suggested next goalie options", style = MaterialTheme.typography.labelLarge)
+                                    Text(
+                                        suggestedGoalies.joinToString { player ->
+                                            "${player.name} (${keeperCounts[player.playerId] ?: 0} halves)"
+                                        },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                }
+                            }
+                        }
+                        PlannerGoalieBreakdownCard(
+                            players = detail.players,
+                            keeperCounts = keeperCounts,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlannerGoalieSnapshotCard(
+    title: String,
+    subtitle: String,
+    rows: List<String>,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            rows.forEach { row ->
+                Text(row, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlannerGoalieBreakdownCard(
+    players: List<PlayerEntity>,
+    keeperCounts: Map<String, Int>,
+    modifier: Modifier = Modifier,
+) {
+    val activePlayers = players.filter { it.active && it.preferredKeeper }.sortedWith(
+        compareBy<PlayerEntity>(
+            { keeperCounts[it.playerId] ?: 0 },
+            { it.name },
+        ),
+    )
+    val maxCount = activePlayers.maxOfOrNull { keeperCounts[it.playerId] ?: 0 }?.coerceAtLeast(1) ?: 1
+
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Season goalie breakdown", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Players with the fewest goalie halves appear first.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            activePlayers.forEach { player ->
+                val count = keeperCounts[player.playerId] ?: 0
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(player.name, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "$count ${if (count == 1) "half" else "halves"}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(10.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(MaterialTheme.colorScheme.surface),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth((count.toFloat() / maxCount.toFloat()).coerceIn(0f, 1f))
+                                    .clip(MaterialTheme.shapes.small)
+                                    .background(McFarlandBlue),
+                            )
+                        }
+                        if (count == 0) {
+                            Text(
+                                "Needs turn",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

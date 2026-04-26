@@ -238,6 +238,10 @@ class SoccerRepository(
         )
     }
 
+    suspend fun deleteGame(game: GameEntity) {
+        gameDao.deleteGame(game)
+    }
+
     suspend fun setPlayerAvailability(gameId: String, playerId: String, halfNumber: Int, isAvailable: Boolean) {
         val existing = availabilityDao.getByGame(gameId).firstOrNull { it.playerId == playerId }
             ?: PlayerAvailabilityEntity(gameId, playerId)

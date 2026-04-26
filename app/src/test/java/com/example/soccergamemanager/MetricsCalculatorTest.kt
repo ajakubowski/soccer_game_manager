@@ -60,4 +60,44 @@ class MetricsCalculatorTest {
         assertEquals(1, metrics.playerMetrics.first { it.playerId == "p2" }.totalGoalsScored)
         assertEquals(1, metrics.playerMetrics.first { it.playerId == "p3" }.totalAssists)
     }
+
+    @Test
+    fun captures_most_recent_game_goalies_for_planner_context() {
+        val template = GameTemplateConfig.defaultU9()
+        val players = listOf(
+            PlayerEntity("p1", "s1", "Alex", preferredKeeper = true),
+            PlayerEntity("p2", "s1", "Blake", preferredKeeper = true),
+            PlayerEntity("p3", "s1", "Casey", preferredKeeper = true),
+        )
+        val olderGame = GameEntity(
+            gameId = "g1",
+            seasonId = "s1",
+            opponent = "Older",
+            location = "Field 1",
+            scheduledAt = 1000L,
+            status = GameStatus.FINAL,
+            templateJson = template.toJson(),
+        )
+        val recentGame = GameEntity(
+            gameId = "g2",
+            seasonId = "s1",
+            opponent = "Recent",
+            location = "Field 2",
+            scheduledAt = 2000L,
+            status = GameStatus.FINAL,
+            templateJson = template.toJson(),
+        )
+        val assignments = listOf(
+            AssignmentEntity("a1", "g1", "p1", 1, 1, FieldPosition.GOALIE, PositionGroup.GOALIE),
+            AssignmentEntity("a2", "g1", "p2", 2, 1, FieldPosition.GOALIE, PositionGroup.GOALIE),
+            AssignmentEntity("a3", "g2", "p2", 1, 1, FieldPosition.GOALIE, PositionGroup.GOALIE),
+            AssignmentEntity("a4", "g2", "p3", 2, 1, FieldPosition.GOALIE, PositionGroup.GOALIE),
+        )
+
+        val metrics = calculator.calculate(players, listOf(olderGame, recentGame), assignments, emptyList())
+
+        assertEquals("g2", metrics.recentGoalieGame?.gameId)
+        assertEquals("Recent", metrics.recentGoalieGame?.opponent)
+        assertEquals(listOf("Blake", "Casey"), metrics.recentGoalieGame?.halfGoalies?.map { it.playerName })
+    }
 }

@@ -138,6 +138,20 @@ data class TeamMetrics(
     val positionGroupSummaries: List<PositionGroupSeasonSummary> = emptyList(),
     val fairnessSummary: FairnessSummary = FairnessSummary(),
     val playerDevelopmentSnapshots: List<PlayerDevelopmentSnapshot> = emptyList(),
+    val recentGoalieGame: RecentGoalieGameSummary? = null,
+)
+
+data class RecentGoalieHalfSummary(
+    val halfNumber: Int,
+    val playerId: String,
+    val playerName: String,
+)
+
+data class RecentGoalieGameSummary(
+    val gameId: String,
+    val opponent: String,
+    val dateLabel: String,
+    val halfGoalies: List<RecentGoalieHalfSummary>,
 )
 
 data class AssignmentCell(
