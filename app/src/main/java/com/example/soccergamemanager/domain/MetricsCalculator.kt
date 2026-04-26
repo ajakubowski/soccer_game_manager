@@ -307,10 +307,15 @@ class MetricsCalculator {
                         } else {
                             "${game.opponent.ifBlank { "Opponent" }} goal"
                         }
+                        val timelineLabel = if (goal.notes.isNotBlank()) {
+                            "$scorerLabel • ${goal.notes}"
+                        } else {
+                            scorerLabel
+                        }
                         add(
                             MatchTimelineEvent(
                                 kind = if (goal.scoredBy == GoalSide.TEAM) MatchTimelineKind.TEAM_GOAL else MatchTimelineKind.OPPONENT_GOAL,
-                                label = scorerLabel,
+                                label = timelineLabel,
                                 halfNumber = half,
                                 elapsedSecondsInHalf = goal.elapsedSecondsInHalf,
                                 roundIndex = goal.roundIndex,

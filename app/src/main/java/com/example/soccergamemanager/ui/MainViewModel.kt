@@ -353,6 +353,24 @@ class MainViewModel(
         }
     }
 
+    fun saveLiveGameNotes(notes: String) {
+        val gameId = selectedGameId.value ?: return
+        launchTask {
+            repository.updateGameNotes(gameId = gameId, liveNotes = notes)
+            refreshReport()
+            message.value = "Live notes saved."
+        }
+    }
+
+    fun savePostGameNotes(notes: String) {
+        val gameId = selectedGameId.value ?: return
+        launchTask {
+            repository.updateGameNotes(gameId = gameId, postGameNotes = notes)
+            refreshReport()
+            message.value = "Post-game notes saved."
+        }
+    }
+
     fun selectGame(gameId: String) {
         selectedGameId.value = gameId
     }
@@ -490,7 +508,12 @@ class MainViewModel(
         }
     }
 
-    fun recordGoal(side: GoalSide, scorerPlayerId: String? = null, assisterPlayerId: String? = null) {
+    fun recordGoal(
+        side: GoalSide,
+        scorerPlayerId: String? = null,
+        assisterPlayerId: String? = null,
+        notes: String? = null,
+    ) {
         val detail = uiState.value.selectedGameDetail ?: return
         launchTask {
             repository.recordGoal(
@@ -498,6 +521,7 @@ class MainViewModel(
                 side = side,
                 scorerPlayerId = scorerPlayerId,
                 assisterPlayerId = assisterPlayerId,
+                notes = notes,
                 currentHalf = detail.game.currentHalf,
                 currentRound = detail.game.currentRound,
                 elapsedSeconds = uiState.value.effectiveHalfElapsedSeconds,

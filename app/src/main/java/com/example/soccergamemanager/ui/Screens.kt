@@ -307,6 +307,8 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                         onApplyInjurySub = viewModel::applyInjurySub,
                         onClearPlayerInjury = viewModel::clearPlayerInjury,
                         onFinalize = viewModel::finalizeGame,
+                        onSaveLiveNotes = viewModel::saveLiveGameNotes,
+                        onSavePostGameNotes = viewModel::savePostGameNotes,
                     )
                 }
                 composable(Destination.History.route) {
@@ -320,6 +322,7 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                         uiState = uiState,
                         onSelectGame = viewModel::selectGame,
                         onRefresh = viewModel::refreshReport,
+                        onSavePostGameNotes = viewModel::savePostGameNotes,
                     )
                 }
             }
@@ -881,11 +884,13 @@ private fun GameHubScreen(
     onStartOrPause: () -> Unit,
     onAdvanceRound: () -> Unit,
     onAdvanceHalf: (Set<String>) -> Unit,
-    onRecordGoal: (GoalSide, String?, String?) -> Unit,
+    onRecordGoal: (GoalSide, String?, String?, String?) -> Unit,
     onApplyLiveSub: (String, String) -> Unit,
     onApplyInjurySub: (String, String) -> Unit,
     onClearPlayerInjury: (String, Boolean) -> Unit,
     onFinalize: () -> Unit,
+    onSaveLiveNotes: (String) -> Unit,
+    onSavePostGameNotes: (String) -> Unit,
 ) {
     val detail = uiState.selectedGameDetail ?: run {
         EmptyState("Open a game from the Games tab to manage it from the game hub.")
@@ -946,6 +951,7 @@ private fun GameHubScreen(
                     onApplyInjurySub = onApplyInjurySub,
                     onClearPlayerInjury = onClearPlayerInjury,
                     onFinalize = onFinalize,
+                    onSaveLiveNotes = onSaveLiveNotes,
                     showHeader = false,
                 )
 
@@ -953,6 +959,7 @@ private fun GameHubScreen(
                     uiState = uiState,
                     onSelectGame = onSelectGame,
                     onRefresh = onRefreshReport,
+                    onSavePostGameNotes = onSavePostGameNotes,
                     showHeader = false,
                     showGamePicker = false,
                 )
@@ -1138,6 +1145,22 @@ private fun OverviewTab(
                 if (detail.game.plannerNotes.isNotBlank()) {
                     Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.primaryContainer) {
                         Text(detail.game.plannerNotes, modifier = Modifier.padding(12.dp))
+                    }
+                }
+                if (detail.game.liveNotes.isNotBlank()) {
+                    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceVariant) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Live notes", style = MaterialTheme.typography.labelLarge)
+                            Text(detail.game.liveNotes)
+                        }
+                    }
+                }
+                if (detail.game.postGameNotes.isNotBlank()) {
+                    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceVariant) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Post-game notes", style = MaterialTheme.typography.labelLarge)
+                            Text(detail.game.postGameNotes)
+                        }
                     }
                 }
             }
@@ -1520,11 +1543,12 @@ private fun LiveScreen(
     onStartOrPause: () -> Unit,
     onAdvanceRound: () -> Unit,
     onAdvanceHalf: (Set<String>) -> Unit,
-    onRecordGoal: (GoalSide, String?, String?) -> Unit,
+    onRecordGoal: (GoalSide, String?, String?, String?) -> Unit,
     onApplyLiveSub: (String, String) -> Unit,
     onApplyInjurySub: (String, String) -> Unit,
     onClearPlayerInjury: (String, Boolean) -> Unit,
     onFinalize: () -> Unit,
+    onSaveLiveNotes: (String) -> Unit,
     showHeader: Boolean = true,
 ) {
     val detail = uiState.selectedGameDetail ?: run {
@@ -1575,8 +1599,20 @@ private fun LiveScreen(
     var showAssistDialog by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
         mutableStateOf(false)
     }
+    var showGoalNoteDialog by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
+        mutableStateOf(false)
+    }
     var pendingScorerId by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
         mutableStateOf<String?>(null)
+    }
+    var pendingAssisterId by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
+        mutableStateOf<String?>(null)
+    }
+    var pendingGoalSide by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
+        mutableStateOf(GoalSide.TEAM.name)
+    }
+    var pendingGoalNote by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
+        mutableStateOf("")
     }
     var scorerShowAll by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
         mutableStateOf(false)
@@ -1598,6 +1634,9 @@ private fun LiveScreen(
     }
     var alertPlayedForRound by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
         mutableStateOf(false)
+    }
+    var liveNotesDraft by rememberSaveable(detail.game.gameId, detail.game.liveNotes) {
+        mutableStateOf(detail.game.liveNotes)
     }
 
     LaunchedEffect(substitutionRemainingSeconds, detail.game.status) {
@@ -1647,6 +1686,8 @@ private fun LiveScreen(
                         OutlinedButton(
                             onClick = {
                                 pendingScorerId = player.playerId
+                                pendingAssisterId = null
+                                pendingGoalSide = GoalSide.TEAM.name
                                 showScorerDialog = false
                                 showAssistDialog = true
                                 scorerShowAll = false
@@ -1658,9 +1699,11 @@ private fun LiveScreen(
                     }
                     TextButton(
                         onClick = {
-                            onRecordGoal(GoalSide.TEAM, null, null)
                             pendingScorerId = null
-                            showAssistDialog = false
+                            pendingAssisterId = null
+                            pendingGoalSide = GoalSide.TEAM.name
+                            pendingGoalNote = ""
+                            showGoalNoteDialog = true
                             showScorerDialog = false
                             scorerShowAll = false
                         },
@@ -1674,6 +1717,8 @@ private fun LiveScreen(
                 TextButton(onClick = {
                     showScorerDialog = false
                     pendingScorerId = null
+                    pendingAssisterId = null
+                    pendingGoalNote = ""
                     scorerShowAll = false
                 }) {
                     Text("Cancel")
@@ -1698,8 +1743,10 @@ private fun LiveScreen(
                     assistChoices.forEach { player ->
                         OutlinedButton(
                             onClick = {
-                                onRecordGoal(GoalSide.TEAM, pendingScorerId, player.playerId)
-                                pendingScorerId = null
+                                pendingAssisterId = player.playerId
+                                pendingGoalSide = GoalSide.TEAM.name
+                                pendingGoalNote = ""
+                                showGoalNoteDialog = true
                                 showAssistDialog = false
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -1709,8 +1756,10 @@ private fun LiveScreen(
                     }
                     TextButton(
                         onClick = {
-                            onRecordGoal(GoalSide.TEAM, pendingScorerId, null)
-                            pendingScorerId = null
+                            pendingAssisterId = null
+                            pendingGoalSide = GoalSide.TEAM.name
+                            pendingGoalNote = ""
+                            showGoalNoteDialog = true
                             showAssistDialog = false
                         },
                     ) {
@@ -1723,8 +1772,83 @@ private fun LiveScreen(
                 TextButton(onClick = {
                     showAssistDialog = false
                     pendingScorerId = null
+                    pendingAssisterId = null
+                    pendingGoalNote = ""
                 }) {
                     Text("Cancel")
+                }
+            },
+        )
+    }
+
+    if (showGoalNoteDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showGoalNoteDialog = false
+                pendingScorerId = null
+                pendingAssisterId = null
+                pendingGoalNote = ""
+            },
+            title = { Text("Add goal note") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Add a quick note about the goal, or skip to save it without a note.")
+                    OutlinedTextField(
+                        value = pendingGoalNote,
+                        onValueChange = { pendingGoalNote = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        maxLines = 5,
+                        placeholder = { Text("Example: won the ball high and finished near post") },
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onRecordGoal(
+                            GoalSide.valueOf(pendingGoalSide),
+                            pendingScorerId,
+                            pendingAssisterId,
+                            pendingGoalNote.ifBlank { null },
+                        )
+                        showGoalNoteDialog = false
+                        pendingScorerId = null
+                        pendingAssisterId = null
+                        pendingGoalNote = ""
+                    },
+                ) {
+                    Text("Save goal")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = {
+                            onRecordGoal(
+                                GoalSide.valueOf(pendingGoalSide),
+                                pendingScorerId,
+                                pendingAssisterId,
+                                null,
+                            )
+                            showGoalNoteDialog = false
+                            pendingScorerId = null
+                            pendingAssisterId = null
+                            pendingGoalNote = ""
+                        },
+                    ) {
+                        Text("Skip note")
+                    }
+                    TextButton(
+                        onClick = {
+                            showGoalNoteDialog = false
+                            pendingScorerId = null
+                            pendingAssisterId = null
+                            pendingGoalNote = ""
+                        },
+                    ) {
+                        Text("Cancel")
+                    }
                 }
             },
         )
@@ -1918,7 +2042,13 @@ private fun LiveScreen(
                         },
                         onFinalize = onFinalize,
                         onTeamGoal = { showScorerDialog = true },
-                        onOpponentGoal = { onRecordGoal(GoalSide.OPPONENT, null, null) },
+                        onOpponentGoal = {
+                            pendingGoalSide = GoalSide.OPPONENT.name
+                            pendingScorerId = null
+                            pendingAssisterId = null
+                            pendingGoalNote = ""
+                            showGoalNoteDialog = true
+                        },
                         showHeader = showHeader,
                     )
                     PositionGroupsCard(
@@ -1937,6 +2067,14 @@ private fun LiveScreen(
                         playerLookup = playerLookup,
                         teamName = teamName,
                         opponentName = detail.game.opponent,
+                    )
+                    GameNotesEditorCard(
+                        title = "Live notes",
+                        subtitle = "Capture quick observations during the game.",
+                        value = liveNotesDraft,
+                        onValueChange = { liveNotesDraft = it },
+                        onSave = { onSaveLiveNotes(liveNotesDraft) },
+                        saveLabel = "Save live notes",
                     )
                 }
                 Column(
@@ -1994,7 +2132,13 @@ private fun LiveScreen(
                     },
                     onFinalize = onFinalize,
                     onTeamGoal = { showScorerDialog = true },
-                    onOpponentGoal = { onRecordGoal(GoalSide.OPPONENT, null, null) },
+                    onOpponentGoal = {
+                        pendingGoalSide = GoalSide.OPPONENT.name
+                        pendingScorerId = null
+                        pendingAssisterId = null
+                        pendingGoalNote = ""
+                        showGoalNoteDialog = true
+                    },
                     showHeader = showHeader,
                 )
                 PositionGroupsCard(
@@ -2033,6 +2177,14 @@ private fun LiveScreen(
                     playerLookup = playerLookup,
                     teamName = teamName,
                     opponentName = detail.game.opponent,
+                )
+                GameNotesEditorCard(
+                    title = "Live notes",
+                    subtitle = "Capture quick observations during the game.",
+                    value = liveNotesDraft,
+                    onValueChange = { liveNotesDraft = it },
+                    onSave = { onSaveLiveNotes(liveNotesDraft) },
+                    saveLabel = "Save live notes",
                 )
             }
         }
@@ -3071,7 +3223,16 @@ private fun GoalLogCard(
                     } else {
                         "${opponentName.ifBlank { "Opponent" }} goal"
                     }
-                    Text("Half ${goal.halfNumber} • ${formatClock(goal.elapsedSecondsInHalf)} • $label")
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Half ${goal.halfNumber} • ${formatClock(goal.elapsedSecondsInHalf)} • $label")
+                        if (goal.notes.isNotBlank()) {
+                            Text(
+                                "Note: ${goal.notes}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -3292,8 +3453,46 @@ private fun HistoryScreen(
                     Column {
                         Text(game.opponent, style = MaterialTheme.typography.titleLarge)
                         Text(formatDate(game.scheduledAt))
+                        if (game.liveNotes.isNotBlank()) {
+                            Text(
+                                "Live notes: ${game.liveNotes.take(80)}${if (game.liveNotes.length > 80) "..." else ""}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (game.postGameNotes.isNotBlank()) {
+                            Text(
+                                "Post-game notes: ${game.postGameNotes.take(80)}${if (game.postGameNotes.length > 80) "..." else ""}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                     Icon(Icons.Outlined.SportsSoccer, contentDescription = null)
+                }
+            }
+        }
+        val selectedFinalGame = uiState.selectedGameDetail?.takeIf { it.game.status == GameStatus.FINAL }
+        if (selectedFinalGame != null && (selectedFinalGame.game.liveNotes.isNotBlank() || selectedFinalGame.game.postGameNotes.isNotBlank())) {
+            item {
+                Card {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Selected game notes", style = MaterialTheme.typography.titleLarge)
+                        if (selectedFinalGame.game.liveNotes.isNotBlank()) {
+                            GameNotesReadOnlyCard(
+                                title = "Live notes",
+                                body = selectedFinalGame.game.liveNotes,
+                                embedded = true,
+                            )
+                        }
+                        if (selectedFinalGame.game.postGameNotes.isNotBlank()) {
+                            GameNotesReadOnlyCard(
+                                title = "Post-game notes",
+                                body = selectedFinalGame.game.postGameNotes,
+                                embedded = true,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -4137,12 +4336,17 @@ private fun ReportsScreen(
     uiState: AppUiState,
     onSelectGame: (String) -> Unit,
     onRefresh: () -> Unit,
+    onSavePostGameNotes: (String) -> Unit,
     showHeader: Boolean = true,
     showGamePicker: Boolean = true,
 ) {
     val context = LocalContext.current
     val report = uiState.report
     val analytics = report?.analytics
+    val detail = uiState.selectedGameDetail
+    var postGameNotesDraft by rememberSaveable(detail?.game?.gameId, detail?.game?.postGameNotes) {
+        mutableStateOf(detail?.game?.postGameNotes.orEmpty())
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -4182,7 +4386,7 @@ private fun ReportsScreen(
                 }
             }
         }
-        if (uiState.selectedGameDetail == null) {
+        if (detail == null) {
             EmptyState("Select a game to preview and print its report.")
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -4226,8 +4430,89 @@ private fun ReportsScreen(
                         )
                     }
                 }
+                if (detail.game.status == GameStatus.FINAL) {
+                    GameNotesEditorCard(
+                        title = "Post-game notes",
+                        subtitle = "Add coaching notes and reminders after the game is complete.",
+                        value = postGameNotesDraft,
+                        onValueChange = { postGameNotesDraft = it },
+                        onSave = { onSavePostGameNotes(postGameNotesDraft) },
+                        saveLabel = "Save post-game notes",
+                    )
+                } else if (detail.game.postGameNotes.isNotBlank()) {
+                    GameNotesReadOnlyCard(
+                        title = "Post-game notes",
+                        body = detail.game.postGameNotes,
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun GameNotesEditorCard(
+    title: String,
+    subtitle: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSave: () -> Unit,
+    saveLabel: String,
+) {
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 4,
+                maxLines = 8,
+                placeholder = { Text("Write notes here...") },
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                Button(onClick = onSave) {
+                    Text(saveLabel)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GameNotesReadOnlyCard(
+    title: String,
+    body: String,
+    embedded: Boolean = false,
+) {
+    val content: @Composable () -> Unit = {
+        Column(
+            Modifier.padding(if (embedded) 0.dp else 16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(body, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+    if (embedded) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            shape = MaterialTheme.shapes.medium,
+        ) {
+            Box(modifier = Modifier.padding(12.dp)) {
+                content()
+            }
+        }
+    } else {
+        Card { content() }
     }
 }
 

@@ -238,6 +238,20 @@ class SoccerRepository(
         )
     }
 
+    suspend fun updateGameNotes(
+        gameId: String,
+        liveNotes: String? = null,
+        postGameNotes: String? = null,
+    ) {
+        val game = gameDao.getGame(gameId) ?: return
+        gameDao.updateGame(
+            game.copy(
+                liveNotes = liveNotes?.trim() ?: game.liveNotes,
+                postGameNotes = postGameNotes?.trim() ?: game.postGameNotes,
+            ),
+        )
+    }
+
     suspend fun deleteGame(game: GameEntity) {
         gameDao.deleteGame(game)
     }
@@ -561,6 +575,7 @@ class SoccerRepository(
         side: GoalSide,
         scorerPlayerId: String?,
         assisterPlayerId: String?,
+        notes: String?,
         currentHalf: Int,
         currentRound: Int,
         elapsedSeconds: Int,
@@ -572,6 +587,7 @@ class SoccerRepository(
                 scoredBy = side,
                 scorerPlayerId = scorerPlayerId,
                 assisterPlayerId = assisterPlayerId,
+                notes = notes?.trim().orEmpty(),
                 halfNumber = currentHalf,
                 roundIndex = currentRound,
                 elapsedSecondsInHalf = elapsedSeconds,
