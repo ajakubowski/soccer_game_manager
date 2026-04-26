@@ -306,6 +306,7 @@ class SoccerRepository(
             (availabilityEntry?.availableFirstHalf ?: true) || (availabilityEntry?.availableSecondHalf ?: true)
         }
         val history = buildHistory(game.seasonId)
+        val variationSeed = if (assignmentDao.getByGame(gameId).isEmpty()) 0 else (System.currentTimeMillis() and 0x7fffffff).toInt()
         val result = lineupGenerator.generate(
             template = game.template(),
             players = availablePlayers.map { player ->
@@ -322,6 +323,7 @@ class SoccerRepository(
             },
             historyByPlayer = history,
             manualGroupLocks = game.manualGroupLocks(),
+            variationSeed = variationSeed,
         )
         assignmentDao.deleteByGame(gameId)
         assignmentDao.insertAll(

@@ -6,6 +6,7 @@ class LineupGenerator {
         players: List<LineupPlayer>,
         historyByPlayer: Map<String, PlayerSeasonHistory>,
         manualGroupLocks: List<ManualGroupLock> = emptyList(),
+        variationSeed: Int = 0,
     ): LineupGenerationResult {
         val warnings = mutableListOf<String>()
 
@@ -34,6 +35,7 @@ class LineupGenerator {
                 historyByPlayer = historyByPlayer,
                 manualLocksByHalfGroup = sanitizedLocks.locksByHalfGroup,
                 selectedKeepers = selectedKeepers,
+                variationSeed = variationSeed,
             )
             selectedKeepers += keeper
             val locksForHalf = sanitizedLocks.locksByHalfGroup[halfNumber].orEmpty()
@@ -72,6 +74,7 @@ class LineupGenerator {
                 lockedPlayersByGroup = lockedFieldPlayersByGroup,
                 priorHalfGroups = priorHalfGroups,
                 historyByPlayer = historyByPlayer,
+                variationSeed = variationSeed,
             )
 
             if (halfNumber == 1) {
@@ -101,6 +104,7 @@ class LineupGenerator {
                     positions = positions,
                     players = groupedPlayers[group].orEmpty(),
                     historyByPlayer = historyByPlayer,
+                    variationSeed = variationSeed,
                 )
                 assignments += groupAssignments
             }
@@ -124,6 +128,7 @@ class LineupGenerator {
         historyByPlayer: Map<String, PlayerSeasonHistory>,
         manualLocksByHalfGroup: Map<Int, Map<PositionGroup, List<LineupPlayer>>>,
         selectedKeepers: List<LineupPlayer>,
+        variationSeed: Int,
     ): LineupPlayer {
         val lockedKeeper = manualLocksByHalfGroup[halfNumber]?.get(PositionGroup.GOALIE)?.firstOrNull()
         if (lockedKeeper != null) {
@@ -140,6 +145,7 @@ class LineupGenerator {
                 { if (it.preferredKeeper) 0 else 1 },
                 { historyByPlayer[it.id]?.keeperAssignments ?: 0 },
                 { historyByPlayer[it.id]?.minutesPlayed ?: 0.0 },
+                { variationRank(variationSeed, "keeper-${halfNumber}-${it.id}") },
                 { it.name },
             ),
         ) ?: players.first()
@@ -186,6 +192,7 @@ class LineupGenerator {
         lockedPlayersByGroup: Map<PositionGroup, List<LineupPlayer>>,
         priorHalfGroups: Map<String, PositionGroup>,
         historyByPlayer: Map<String, PlayerSeasonHistory>,
+        variationSeed: Int,
     ): Map<PositionGroup, List<LineupPlayer>> {
         val result = mutableMapOf(
             PositionGroup.DEFENSE to lockedPlayersByGroup[PositionGroup.DEFENSE].orEmpty().toMutableList(),
@@ -310,6 +317,7 @@ class LineupGenerator {
         positions: List<FieldPosition>,
         players: List<LineupPlayer>,
         historyByPlayer: Map<String, PlayerSeasonHistory>,
+        variationSeed: Int,
     ): List<GeneratedAssignment> {
         if (players.isEmpty()) return emptyList()
         val slotCounts = players.associate { it.id to 0 }.toMutableMap()
@@ -323,6 +331,7 @@ class LineupGenerator {
                     compareBy<LineupPlayer>(
                         { slotCounts[it.id] ?: 0 },
                         { historyByPlayer[it.id]?.minutesPlayed ?: 0.0 },
+                        { variationRank(variationSeed, "round-${halfNumber}-${roundIndex}-${it.id}") },
                         { it.name },
                     ),
                 )
@@ -355,6 +364,7 @@ class LineupGenerator {
                                 positionCounts.getOrDefault(it.id to position, 0)
                         },
                         { slotCounts[it.id] ?: 0 },
+                        { variationRank(variationSeed, "position-${halfNumber}-${roundIndex}-${position.name}-${it.id}") },
                         { it.name },
                     ),
                 ) ?: return@forEach
@@ -381,4 +391,6 @@ class LineupGenerator {
 
         return assignments
     }
+
+    private fun variationRank(seed: Int, key: String): Int = (seed.toString() + key).hashCode()
 }

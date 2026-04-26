@@ -1170,7 +1170,14 @@ private fun PlannerScreen(
 
     editingLockKey?.let { (halfNumber, group) ->
         val existingSelection = manualLocksByHalfGroup[halfNumber to group].orEmpty()
-        var selectedIds by rememberSaveable(detail.game.gameId, halfNumber, group.name) {
+        val lockedElsewhereIds = manualLocksByHalfGroup
+            .filterKeys { (lockedHalfNumber, lockedGroup) ->
+                lockedHalfNumber == halfNumber && lockedGroup != group
+            }
+            .values
+            .flatten()
+            .toSet()
+        var selectedIds by remember(detail.game.gameId, halfNumber, group, existingSelection, manualLocksByHalfGroup) {
             mutableStateOf(existingSelection)
         }
 
@@ -1186,12 +1193,19 @@ private fun PlannerScreen(
                             "Choose players to keep in ${group.label} for this half before autofill."
                         },
                     )
+                    Text(
+                        "Players already locked in another group for this half are shown but cannot be selected here.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     availablePlayers
                         .filter { availabilityMap[it.playerId]?.isAvailableForHalf(halfNumber) != false }
                         .forEach { player ->
+                        val lockedElsewhere = player.playerId in lockedElsewhereIds && player.playerId !in selectedIds
                         FilterChip(
                             selected = player.playerId in selectedIds,
                             onClick = {
+                                if (lockedElsewhere) return@FilterChip
                                 selectedIds = if (group == PositionGroup.GOALIE) {
                                     if (player.playerId in selectedIds) emptyList() else listOf(player.playerId)
                                 } else if (player.playerId in selectedIds) {
@@ -1200,7 +1214,16 @@ private fun PlannerScreen(
                                     selectedIds + player.playerId
                                 }
                             },
-                            label = { Text(player.name) },
+                            label = {
+                                Text(
+                                    if (lockedElsewhere) {
+                                        "${player.name} (locked elsewhere)"
+                                    } else {
+                                        player.name
+                                    },
+                                )
+                            },
+                            enabled = !lockedElsewhere,
                         )
                     }
                     if (selectedIds.isNotEmpty()) {
@@ -1358,32 +1381,80 @@ private fun PlannerScreen(
                 }
             }
         }
-        items((1..detail.game.template().halfCount).toList(), key = { "locks-$it" }) { halfNumber ->
-            ManualLocksCard(
-                halfNumber = halfNumber,
-                playerLookup = playerLookup,
-                locksByGroup = manualLocksByHalfGroup,
-                onEditGroup = { group ->
-                    if (!readOnly) {
-                        editingLockKey = halfNumber to group
+        item {
+            BoxWithConstraints {
+                val halfNumbers = (1..detail.game.template().halfCount).toList()
+                if (maxWidth > 920.dp && halfNumbers.size >= 2) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        halfNumbers.forEach { halfNumber ->
+                            ManualLocksCard(
+                                modifier = Modifier.weight(1f),
+                                halfNumber = halfNumber,
+                                playerLookup = playerLookup,
+                                locksByGroup = manualLocksByHalfGroup,
+                                onEditGroup = { group ->
+                                    if (!readOnly) {
+                                        editingLockKey = halfNumber to group
+                                    }
+                                },
+                                editable = !readOnly,
+                            )
+                        }
                     }
-                },
-                editable = !readOnly,
-            )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        halfNumbers.forEach { halfNumber ->
+                            ManualLocksCard(
+                                halfNumber = halfNumber,
+                                playerLookup = playerLookup,
+                                locksByGroup = manualLocksByHalfGroup,
+                                onEditGroup = { group ->
+                                    if (!readOnly) {
+                                        editingLockKey = halfNumber to group
+                                    }
+                                },
+                                editable = !readOnly,
+                            )
+                        }
+                    }
+                }
+            }
         }
         if (detail.assignments.isEmpty()) {
             item { EmptyState("Generate the lineup to see half groups and round-by-round assignments.") }
         } else {
-            (1..detail.game.template().halfCount).forEach { halfNumber ->
-                item { HalfSummaryCard(detail, halfNumber) }
-                item { Text("Half $halfNumber rounds", style = MaterialTheme.typography.titleLarge) }
-                items((1..detail.game.template().roundsPerHalf).toList(), key = { "$halfNumber-$it" }) { roundNumber ->
-                    RoundCard(
-                        detail = detail,
-                        halfNumber = halfNumber,
-                        roundNumber = roundNumber,
-                        onOpenAssignment = { editingAssignmentId = it.assignmentId },
-                    )
+            item {
+                PositionGroupComparisonSection(detail = detail)
+            }
+            item {
+                BoxWithConstraints {
+                    val halfNumbers = (1..detail.game.template().halfCount).toList()
+                    if (maxWidth > 1080.dp && halfNumbers.size >= 2) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            halfNumbers.forEach { halfNumber ->
+                                PlannerHalfRoundsSection(
+                                    modifier = Modifier.weight(1f),
+                                    detail = detail,
+                                    halfNumber = halfNumber,
+                                    onOpenAssignment = { editingAssignmentId = it.assignmentId },
+                                )
+                            }
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            halfNumbers.forEach { halfNumber ->
+                                PlannerHalfRoundsSection(
+                                    detail = detail,
+                                    halfNumber = halfNumber,
+                                    onOpenAssignment = { editingAssignmentId = it.assignmentId },
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1425,6 +1496,16 @@ private fun LiveScreen(
     val nextAssignmentByPosition = nextAssignments.associateBy { it.position }
     val activeRoster = detail.players.filter { it.active }.sortedBy { it.name }
     val injuredPlayers = detail.availability.filter { it.isInjured }
+    val halfPositionGroupByPlayerId = detail.assignments
+        .filter { it.halfNumber == detail.game.currentHalf }
+        .groupBy { it.playerId }
+        .mapValues { (_, assignments) ->
+            assignments
+                .groupingBy { it.positionGroup }
+                .eachCount()
+                .maxByOrNull { it.value }
+                ?.key
+        }
     val onFieldPlayerIds = currentAssignments.map { it.playerId }.toSet()
     val benchCandidates = activeRoster.filter { player ->
         player.playerId !in onFieldPlayerIds &&
@@ -1649,38 +1730,84 @@ private fun LiveScreen(
     selectedAssignmentId?.let { assignmentId ->
         val assignment = currentAssignments.firstOrNull { it.assignmentId == assignmentId }
         if (assignment != null) {
+            val prioritizedBenchCandidates = benchCandidates.sortedWith(
+                compareByDescending<PlayerEntity> {
+                    halfPositionGroupByPlayerId[it.playerId] == assignment.positionGroup
+                }.thenBy { it.name },
+            )
             AlertDialog(
                 onDismissRequest = { selectedAssignmentId = null },
                 title = { Text("${assignment.position.label} actions") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Current player: ${playerLookup[assignment.playerId].orEmpty()}")
+                        Text("Position group: ${assignment.positionGroup.label}")
                         if (benchCandidates.isEmpty()) {
                             Text("No bench players are available for a quick sub.")
                         } else {
                             Text("Quick sub")
-                            benchCandidates.forEach { player ->
+                            prioritizedBenchCandidates.forEach { player ->
+                                val sameGroup = halfPositionGroupByPlayerId[player.playerId] == assignment.positionGroup
                                 OutlinedButton(
                                     onClick = {
                                         onApplyLiveSub(assignment.assignmentId, player.playerId)
                                         selectedAssignmentId = null
                                     },
                                     modifier = Modifier.fillMaxWidth(),
+                                    border = if (sameGroup) {
+                                        BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                                    } else {
+                                        null
+                                    },
                                 ) {
-                                    Text(player.name)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(player.name)
+                                        if (sameGroup) {
+                                            Text(
+                                                "Same group",
+                                                color = MaterialTheme.colorScheme.primary,
+                                                style = MaterialTheme.typography.labelMedium,
+                                            )
+                                        }
+                                    }
                                 }
                             }
                             HorizontalDivider()
                             Text("Mark injured and sub")
-                            benchCandidates.forEach { player ->
+                            prioritizedBenchCandidates.forEach { player ->
+                                val sameGroup = halfPositionGroupByPlayerId[player.playerId] == assignment.positionGroup
                                 Button(
                                     onClick = {
                                         onApplyInjurySub(assignment.assignmentId, player.playerId)
                                         selectedAssignmentId = null
                                     },
                                     modifier = Modifier.fillMaxWidth(),
+                                    colors = if (sameGroup) {
+                                        ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = IceWhite,
+                                        )
+                                    } else {
+                                        ButtonDefaults.buttonColors()
+                                    },
                                 ) {
-                                    Text("Injure out, ${player.name} in")
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text("Injure out, ${player.name} in")
+                                        if (sameGroup) {
+                                            Text(
+                                                "Same group",
+                                                style = MaterialTheme.typography.labelMedium,
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -4143,21 +4270,108 @@ private fun EmptyState(message: String) {
 }
 
 @Composable
-private fun HalfSummaryCard(detail: GameDetail, halfNumber: Int) {
+private fun PositionGroupComparisonSection(detail: GameDetail) {
+    val halfNumbers = (1..detail.game.template().halfCount).toList()
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Position group comparison", style = MaterialTheme.typography.titleLarge)
+        Text(
+            "Compare the planned groups for both halves before you dive into the round-by-round rotation.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        BoxWithConstraints {
+            if (maxWidth > 920.dp && halfNumbers.size >= 2) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    halfNumbers.forEach { halfNumber ->
+                        HalfSummaryCard(
+                            detail = detail,
+                            halfNumber = halfNumber,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    halfNumbers.forEach { halfNumber ->
+                        HalfSummaryCard(detail = detail, halfNumber = halfNumber)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HalfSummaryCard(
+    detail: GameDetail,
+    halfNumber: Int,
+    modifier: Modifier = Modifier,
+) {
     val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
     val halfAssignments = detail.assignments.filter { it.halfNumber == halfNumber }
-    val summary = PositionGroup.entries.associateWith { group ->
+    val summary = listOf(
+        PositionGroup.DEFENSE,
+        PositionGroup.LR_MID,
+        PositionGroup.CM_STRIKER,
+        PositionGroup.GOALIE,
+    ).associateWith { group ->
         halfAssignments
             .filter { it.positionGroup == group }
             .mapNotNull { playerLookup[it.playerId] }
             .distinct()
     }
-    Card {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Half $halfNumber groups", style = MaterialTheme.typography.titleLarge)
+    Card(modifier = modifier) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Half $halfNumber groups", style = MaterialTheme.typography.titleMedium)
             summary.forEach { (group, players) ->
-                Text("${group.label}: ${players.joinToString().ifBlank { "None" }}")
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                    shape = MaterialTheme.shapes.medium,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Text(
+                            group.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.width(92.dp),
+                        )
+                        Text(
+                            players.joinToString().ifBlank { "None" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun PlannerHalfRoundsSection(
+    detail: GameDetail,
+    halfNumber: Int,
+    onOpenAssignment: (AssignmentEntity) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Half $halfNumber rounds", style = MaterialTheme.typography.titleLarge)
+        (1..detail.game.template().roundsPerHalf).forEach { roundNumber ->
+            RoundCard(
+                detail = detail,
+                halfNumber = halfNumber,
+                roundNumber = roundNumber,
+                onOpenAssignment = onOpenAssignment,
+            )
         }
     }
 }
@@ -4175,21 +4389,37 @@ private fun RoundCard(
         .filter { it.halfNumber == halfNumber && it.roundIndex == roundNumber }
         .sortedBy { template.positions.indexOf(it.position) }
     Card {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Round $roundNumber", style = MaterialTheme.typography.titleLarge)
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Round $roundNumber", style = MaterialTheme.typography.titleMedium)
             assignments.forEach { assignment ->
-                OutlinedButton(
-                    onClick = { onOpenAssignment(assignment) },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = detail.game.status != GameStatus.LIVE && detail.game.status != GameStatus.FINAL,
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(
+                            enabled = detail.game.status != GameStatus.LIVE && detail.game.status != GameStatus.FINAL,
+                        ) { onOpenAssignment(assignment) },
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(assignment.position.label)
-                        Text(playerLookup[assignment.playerId].orEmpty())
+                        Text(
+                            assignment.position.label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            playerLookup[assignment.playerId].orEmpty(),
+                            style = MaterialTheme.typography.labelLarge,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                 }
             }
@@ -4261,15 +4491,16 @@ private fun GameDateTimePicker(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ManualLocksCard(
+    modifier: Modifier = Modifier,
     halfNumber: Int,
     playerLookup: Map<String, String>,
     locksByGroup: Map<Pair<Int, PositionGroup>, List<String>>,
     onEditGroup: (PositionGroup) -> Unit,
     editable: Boolean,
 ) {
-    Card {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Half $halfNumber manual locks", style = MaterialTheme.typography.titleLarge)
+    Card(modifier = modifier) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Half $halfNumber manual locks", style = MaterialTheme.typography.titleMedium)
             Text("Lock key players into a position group before generating the lineup.")
             listOf(
                 PositionGroup.GOALIE,

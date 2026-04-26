@@ -126,6 +126,66 @@ class LineupGeneratorTest {
     }
 
     @Test
+    fun ignores_duplicate_manual_lock_across_groups_in_same_half() {
+        val players = (1..11).map { index ->
+            LineupPlayer(
+                id = "p$index",
+                name = "Player $index",
+                preferredKeeper = index <= 2,
+            )
+        }
+
+        val result = generator.generate(
+            template = GameTemplateConfig.defaultU9(),
+            players = players,
+            historyByPlayer = emptyMap(),
+            manualGroupLocks = listOf(
+                ManualGroupLock(halfNumber = 1, positionGroup = PositionGroup.DEFENSE, playerIds = listOf("p3")),
+                ManualGroupLock(halfNumber = 1, positionGroup = PositionGroup.LR_MID, playerIds = listOf("p3")),
+            ),
+        )
+
+        val firstHalfAssignmentsForPlayer = result.assignments
+            .filter { it.halfNumber == 1 && it.playerId == "p3" }
+            .map { it.positionGroup }
+            .toSet()
+
+        assertEquals(setOf(PositionGroup.DEFENSE), firstHalfAssignmentsForPlayer)
+        assertTrue(result.warnings.any { it.contains("Ignored duplicate manual lock for Player 3") })
+    }
+
+    @Test
+    fun variation_seed_can_generate_a_different_valid_lineup() {
+        val players = (1..11).map { index ->
+            LineupPlayer(
+                id = "p$index",
+                name = "Player $index",
+                preferredKeeper = index <= 3,
+            )
+        }
+
+        val baseline = generator.generate(
+            template = GameTemplateConfig.defaultU9(),
+            players = players,
+            historyByPlayer = emptyMap(),
+            variationSeed = 0,
+        )
+        val regenerated = generator.generate(
+            template = GameTemplateConfig.defaultU9(),
+            players = players,
+            historyByPlayer = emptyMap(),
+            variationSeed = 12345,
+        )
+
+        assertEquals(baseline.assignments.size, regenerated.assignments.size)
+        assertTrue(
+            baseline.assignments.zip(regenerated.assignments).any { (first, second) ->
+                first.playerId != second.playerId || first.position != second.position
+            },
+        )
+    }
+
+    @Test
     fun keeps_returning_players_in_same_position_between_rounds() {
         val players = (1..8).map { index ->
             LineupPlayer(
