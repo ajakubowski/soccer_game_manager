@@ -3,6 +3,7 @@ package com.example.soccergamemanager.data
 import com.example.soccergamemanager.domain.GameStatus
 import com.example.soccergamemanager.domain.GameTemplateConfig
 import com.example.soccergamemanager.domain.GoalSide
+import com.example.soccergamemanager.domain.FieldPosition
 import com.example.soccergamemanager.domain.LineupGenerationResult
 import com.example.soccergamemanager.domain.LineupGenerator
 import com.example.soccergamemanager.domain.LineupPlayer
@@ -209,7 +210,14 @@ class SoccerRepository(
         val players = playerDao.getPlayersBySeason(seasonId).filter { it.active }
         availabilityDao.upsertAll(
             players.map { player ->
-                PlayerAvailabilityEntity(gameId = gameId, playerId = player.playerId, isAvailable = true, isInjured = false)
+                PlayerAvailabilityEntity(
+                    gameId = gameId,
+                    playerId = player.playerId,
+                    isAvailable = true,
+                    isInjured = false,
+                    availableFirstHalf = true,
+                    availableSecondHalf = true,
+                )
             },
         )
         return gameId
@@ -230,25 +238,38 @@ class SoccerRepository(
         )
     }
 
-    suspend fun setPlayerAvailability(gameId: String, playerId: String, isAvailable: Boolean) {
+    suspend fun setPlayerAvailability(gameId: String, playerId: String, halfNumber: Int, isAvailable: Boolean) {
         val existing = availabilityDao.getByGame(gameId).firstOrNull { it.playerId == playerId }
-        availabilityDao.upsertAll(
-            listOf(
-                (existing ?: PlayerAvailabilityEntity(gameId, playerId)).copy(isAvailable = isAvailable),
-            ),
-        )
+            ?: PlayerAvailabilityEntity(gameId, playerId)
+        val updated = when (halfNumber) {
+            1 -> existing.copy(
+                isAvailable = isAvailable || existing.availableSecondHalf,
+                availableFirstHalf = isAvailable,
+            )
+            2 -> existing.copy(
+                isAvailable = existing.availableFirstHalf || isAvailable,
+                availableSecondHalf = isAvailable,
+            )
+            else -> existing.copy(
+                isAvailable = isAvailable,
+                availableFirstHalf = isAvailable,
+                availableSecondHalf = isAvailable,
+            )
+        }
+        availabilityDao.upsertAll(listOf(updated))
     }
 
     suspend fun clearPlayerInjury(gameId: String, playerId: String, returnImmediately: Boolean = false) {
         val existing = availabilityDao.getByGame(gameId).firstOrNull { it.playerId == playerId } ?: return
-        availabilityDao.upsertAll(listOf(existing.copy(isInjured = false)))
         val game = gameDao.getGame(gameId) ?: return
+        availabilityDao.upsertAll(listOf(existing.copy(isInjured = false)))
         if (returnImmediately && game.status != GameStatus.FINAL) {
             restorePlayerToCurrentAssignment(
                 game = game,
                 returningPlayerId = playerId,
                 targetHalf = game.currentHalf,
                 roundIndex = game.currentRound,
+                injuryContext = existing,
             )
         }
         if (game.status != GameStatus.FINAL) {
@@ -257,8 +278,20 @@ class SoccerRepository(
                 returningPlayerId = playerId,
                 targetHalf = game.currentHalf,
                 startRoundExclusive = game.currentRound,
+                injuryContext = existing,
             )
         }
+        availabilityDao.upsertAll(
+            listOf(
+                existing.copy(
+                    isInjured = false,
+                    injuredAssignmentId = null,
+                    injuredPosition = null,
+                    injuredHalfNumber = null,
+                    injuredRoundIndex = null,
+                ),
+            ),
+        )
     }
 
     suspend fun generateAssignments(gameId: String): LineupGenerationResult {
@@ -268,15 +301,23 @@ class SoccerRepository(
         }
         val players = playerDao.getPlayersBySeason(game.seasonId).filter { it.active }
         val availability = availabilityDao.getByGame(gameId).associateBy { it.playerId }
-        val availablePlayers = players.filter { availability[it.playerId]?.isAvailable != false }
+        val availablePlayers = players.filter { player ->
+            val availabilityEntry = availability[player.playerId]
+            (availabilityEntry?.availableFirstHalf ?: true) || (availabilityEntry?.availableSecondHalf ?: true)
+        }
         val history = buildHistory(game.seasonId)
         val result = lineupGenerator.generate(
             template = game.template(),
             players = availablePlayers.map { player ->
+                val availabilityEntry = availability[player.playerId]
                 LineupPlayer(
                     id = player.playerId,
                     name = player.name,
                     preferredKeeper = player.preferredKeeper,
+                    availableHalfNumbers = buildSet {
+                        if (availabilityEntry?.availableFirstHalf != false) add(1)
+                        if (availabilityEntry?.availableSecondHalf != false) add(2)
+                    },
                 )
             },
             historyByPlayer = history,
@@ -345,7 +386,7 @@ class SoccerRepository(
         occupiedPlayerIds.remove(assignment.playerId)
 
         val candidates = players.filter { player ->
-            availability[player.playerId]?.isAvailable != false &&
+            availability[player.playerId]?.isAvailableForHalf(assignment.halfNumber) != false &&
                 (player.playerId == assignment.playerId || player.playerId !in occupiedPlayerIds)
         }
         if (candidates.isEmpty()) return
@@ -372,7 +413,7 @@ class SoccerRepository(
         val players = playerDao.getPlayersBySeason(game.seasonId)
         val replacement = players.firstOrNull { it.playerId == replacementPlayerId && it.active } ?: return
         val availability = availabilityDao.getByGame(game.gameId).associateBy { it.playerId }
-        if (availability[replacement.playerId]?.isAvailable == false) return
+        if (availability[replacement.playerId]?.isAvailableForHalf(assignment.halfNumber) == false) return
 
         val roundAssignments = assignmentDao.getByRound(game.gameId, assignment.halfNumber, assignment.roundIndex)
         val swapAssignment = roundAssignments.firstOrNull {
@@ -406,7 +447,12 @@ class SoccerRepository(
         if (game.status == GameStatus.FINAL) return
 
         val injuredPlayerId = assignment.playerId
-        markInjured(game.gameId, injuredPlayerId, true)
+        markInjured(
+            gameId = game.gameId,
+            playerId = injuredPlayerId,
+            injured = true,
+            assignment = assignment,
+        )
         applyLiveSub(assignmentId, replacementPlayerId)
         removePlayersFromFutureAssignments(
             game = game,
@@ -579,10 +625,25 @@ class SoccerRepository(
         }
     }
 
-    private suspend fun markInjured(gameId: String, playerId: String, injured: Boolean) {
+    private suspend fun markInjured(
+        gameId: String,
+        playerId: String,
+        injured: Boolean,
+        assignment: AssignmentEntity? = null,
+    ) {
         val existing = availabilityDao.getByGame(gameId).firstOrNull { it.playerId == playerId }
             ?: PlayerAvailabilityEntity(gameId = gameId, playerId = playerId)
-        availabilityDao.upsertAll(listOf(existing.copy(isInjured = injured)))
+        availabilityDao.upsertAll(
+            listOf(
+                existing.copy(
+                    isInjured = injured,
+                    injuredAssignmentId = if (injured) assignment?.assignmentId else null,
+                    injuredPosition = if (injured) assignment?.position else null,
+                    injuredHalfNumber = if (injured) assignment?.halfNumber else null,
+                    injuredRoundIndex = if (injured) assignment?.roundIndex else null,
+                ),
+            ),
+        )
     }
 
     private suspend fun removePlayersFromFutureAssignments(
@@ -615,7 +676,7 @@ class SoccerRepository(
                     .filter { candidate ->
                         candidate.playerId !in removedPlayerIds &&
                             candidate.playerId !in occupiedIds &&
-                            availabilityMap[candidate.playerId]?.isAvailable != false &&
+                            availabilityMap[candidate.playerId]?.isAvailableForHalf(assignment.halfNumber) != false &&
                             availabilityMap[candidate.playerId]?.isInjured != true
                     }
                     .sortedBy { it.name }
@@ -637,13 +698,14 @@ class SoccerRepository(
         returningPlayerId: String,
         targetHalf: Int,
         startRoundExclusive: Int,
+        injuryContext: PlayerAvailabilityEntity,
     ) {
         val playersById = playerDao.getPlayersBySeason(game.seasonId)
             .filter { it.active }
             .associateBy { it.playerId }
         val returningPlayer = playersById[returningPlayerId] ?: return
         val availabilityMap = availabilityDao.getByGame(game.gameId).associateBy { it.playerId }
-        if (availabilityMap[returningPlayerId]?.isAvailable == false || availabilityMap[returningPlayerId]?.isInjured == true) return
+        if (availabilityMap[returningPlayerId]?.isAvailableForHalf(targetHalf) == false || availabilityMap[returningPlayerId]?.isInjured == true) return
 
         val assignmentsById = assignmentDao.getByGame(game.gameId).associateBy { it.assignmentId }.toMutableMap()
         val allAssignments = assignmentsById.values.toList()
@@ -673,6 +735,7 @@ class SoccerRepository(
             returningPlayerId = returningPlayerId,
             targetHalf = targetHalf,
             targetGroup = targetGroup,
+            preferredPositionOverride = injuryContext.injuredPosition,
         )
         val futureLoadByPlayer = futureAssignments.groupingBy { it.playerId }.eachCount().toMutableMap()
         val updates = mutableListOf<AssignmentEntity>()
@@ -717,52 +780,21 @@ class SoccerRepository(
         returningPlayerId: String,
         targetHalf: Int,
         roundIndex: Int,
+        injuryContext: PlayerAvailabilityEntity,
     ) {
         val playersById = playerDao.getPlayersBySeason(game.seasonId)
             .filter { it.active }
             .associateBy { it.playerId }
         val returningPlayer = playersById[returningPlayerId] ?: return
         val availabilityMap = availabilityDao.getByGame(game.gameId).associateBy { it.playerId }
-        if (availabilityMap[returningPlayerId]?.isAvailable == false || availabilityMap[returningPlayerId]?.isInjured == true) return
+        if (availabilityMap[returningPlayerId]?.isAvailableForHalf(targetHalf) == false || availabilityMap[returningPlayerId]?.isInjured == true) return
 
-        val roundAssignments = assignmentDao.getByRound(game.gameId, targetHalf, roundIndex)
-        if (roundAssignments.any { it.playerId == returningPlayerId }) return
-
-        val targetGroup = determineReturnGroup(
-            game = game,
-            assignments = assignmentDao.getByGame(game.gameId),
-            returningPlayer = returningPlayer,
-            targetHalf = targetHalf,
-        )
-        val preferredPositions = determinePreferredPositions(
-            assignments = assignmentDao.getByGame(game.gameId),
-            returningPlayerId = returningPlayerId,
-            targetHalf = targetHalf,
-            targetGroup = targetGroup,
-        )
-        val lockedPlayerIdsForGroup = game.manualGroupLocks()
-            .firstOrNull { it.halfNumber == targetHalf && it.positionGroup == targetGroup }
-            ?.playerIds
-            ?.toSet()
-            .orEmpty()
-
-        val replacementTarget = roundAssignments
-            .filter { it.positionGroup == targetGroup }
-            .sortedWith(
-                compareBy<AssignmentEntity>(
-                    { if (it.playerId in lockedPlayerIdsForGroup) 1 else 0 },
-                    {
-                        val index = preferredPositions.indexOf(it.position)
-                        if (index == -1) Int.MAX_VALUE else index
-                    },
-                    { playersById[it.playerId]?.name.orEmpty() },
-                ),
-            )
-            .firstOrNull()
-            ?: return
+        val exactAssignmentId = injuryContext.injuredAssignmentId ?: return
+        val injuredAssignment = assignmentDao.getAssignment(exactAssignmentId) ?: return
+        if (injuredAssignment.halfNumber != targetHalf || injuredAssignment.roundIndex != roundIndex) return
 
         assignmentDao.updateAssignments(
-            listOf(replacementTarget.copy(playerId = returningPlayerId)),
+            listOf(injuredAssignment.copy(playerId = returningPlayerId)),
         )
     }
 
@@ -801,6 +833,7 @@ class SoccerRepository(
         returningPlayerId: String,
         targetHalf: Int,
         targetGroup: PositionGroup,
+        preferredPositionOverride: FieldPosition? = null,
     ): List<com.example.soccergamemanager.domain.FieldPosition> {
         val positionsInGroup = when (targetGroup) {
             PositionGroup.GOALIE -> listOf(com.example.soccergamemanager.domain.FieldPosition.GOALIE)
@@ -831,7 +864,8 @@ class SoccerRepository(
             .eachCount()
 
         return positionsInGroup.sortedWith(
-            compareByDescending<com.example.soccergamemanager.domain.FieldPosition> { halfPositionCounts[it] ?: 0 }
+            compareByDescending<com.example.soccergamemanager.domain.FieldPosition> { if (it == preferredPositionOverride) 1 else 0 }
+                .thenByDescending { halfPositionCounts[it] ?: 0 }
                 .thenByDescending { allPositionCounts[it] ?: 0 }
                 .thenBy { positionsInGroup.indexOf(it) },
         )

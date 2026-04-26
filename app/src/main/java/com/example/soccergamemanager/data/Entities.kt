@@ -103,7 +103,19 @@ data class PlayerAvailabilityEntity(
     val playerId: String,
     val isAvailable: Boolean = true,
     val isInjured: Boolean = false,
+    val availableFirstHalf: Boolean = true,
+    val availableSecondHalf: Boolean = true,
+    val injuredAssignmentId: String? = null,
+    val injuredPosition: FieldPosition? = null,
+    val injuredHalfNumber: Int? = null,
+    val injuredRoundIndex: Int? = null,
 )
+
+fun PlayerAvailabilityEntity.isAvailableForHalf(halfNumber: Int): Boolean = when (halfNumber) {
+    1 -> availableFirstHalf
+    2 -> availableSecondHalf
+    else -> isAvailable
+}
 
 @Entity(
     tableName = "assignments",

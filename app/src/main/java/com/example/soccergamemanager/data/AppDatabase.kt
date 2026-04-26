@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AssignmentEntity::class,
         GoalEventEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -36,6 +36,7 @@ abstract class AppDatabase : RoomDatabase() {
                 .addMigrations(MIGRATION_2_3)
                 .addMigrations(MIGRATION_3_4)
                 .addMigrations(MIGRATION_4_5)
+                .addMigrations(MIGRATION_5_6)
                 .build()
 
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -69,6 +70,29 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(database: SupportSQLiteDatabase) {
                 database.execSQL(
                     "ALTER TABLE goal_events ADD COLUMN assisterPlayerId TEXT",
+                )
+            }
+        }
+
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE player_availability ADD COLUMN availableFirstHalf INTEGER NOT NULL DEFAULT 1",
+                )
+                database.execSQL(
+                    "ALTER TABLE player_availability ADD COLUMN availableSecondHalf INTEGER NOT NULL DEFAULT 1",
+                )
+                database.execSQL(
+                    "ALTER TABLE player_availability ADD COLUMN injuredAssignmentId TEXT",
+                )
+                database.execSQL(
+                    "ALTER TABLE player_availability ADD COLUMN injuredPosition TEXT",
+                )
+                database.execSQL(
+                    "ALTER TABLE player_availability ADD COLUMN injuredHalfNumber INTEGER",
+                )
+                database.execSQL(
+                    "ALTER TABLE player_availability ADD COLUMN injuredRoundIndex INTEGER",
                 )
             }
         }

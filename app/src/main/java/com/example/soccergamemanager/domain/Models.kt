@@ -71,6 +71,7 @@ data class LineupPlayer(
     val id: String,
     val name: String,
     val preferredKeeper: Boolean,
+    val availableHalfNumbers: Set<Int> = setOf(1, 2),
 )
 
 data class PlayerSeasonHistory(

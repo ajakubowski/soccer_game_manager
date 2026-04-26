@@ -104,6 +104,7 @@ import com.example.soccergamemanager.data.GoalEventEntity
 import com.example.soccergamemanager.data.PlayerAvailabilityEntity
 import com.example.soccergamemanager.data.PlayerEntity
 import com.example.soccergamemanager.data.SeasonEntity
+import com.example.soccergamemanager.data.isAvailableForHalf
 import com.example.soccergamemanager.data.manualGroupLocks
 import com.example.soccergamemanager.data.template
 import com.example.soccergamemanager.domain.FieldPosition
@@ -258,6 +259,7 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                         onDeleteSeason = viewModel::deleteSeason,
                         onAddPlayer = viewModel::addPlayer,
                         onUpdateSeasonDefaults = viewModel::updateSeasonDefaults,
+                        onUpdateOrientationLock = viewModel::updateOrientationLock,
                         onUpdatePlayer = viewModel::updatePlayerDetails,
                         onTogglePlayerActive = viewModel::togglePlayerActive,
                     )
@@ -334,6 +336,7 @@ private fun SetupScreen(
     onDeleteSeason: (SeasonEntity) -> Unit,
     onAddPlayer: (String, String, Boolean) -> Unit,
     onUpdateSeasonDefaults: (String, String) -> Unit,
+    onUpdateOrientationLock: (OrientationLockMode) -> Unit,
     onUpdatePlayer: (PlayerEntity, String, String, Boolean, String) -> Unit,
     onTogglePlayerActive: (PlayerEntity) -> Unit,
 ) {
@@ -509,6 +512,16 @@ private fun SetupScreen(
                         enabled = uiState.selectedSeasonId != null,
                     ) {
                         Text("Save defaults")
+                    }
+                    Text("Screen orientation", style = MaterialTheme.typography.titleMedium)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OrientationLockMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = uiState.orientationLockMode == mode,
+                                onClick = { onUpdateOrientationLock(mode) },
+                                label = { Text(mode.label) },
+                            )
+                        }
                     }
                 }
             }
@@ -815,7 +828,7 @@ private fun GameHubScreen(
     onSelectGame: (String) -> Unit,
     onRefreshReport: () -> Unit,
     onGenerateAssignments: () -> Unit,
-    onToggleAvailability: (String, Boolean) -> Unit,
+    onToggleAvailability: (String, Int, Boolean) -> Unit,
     onUpdateManualGroupLock: (Int, PositionGroup, List<String>) -> Unit,
     onSetAssignmentPlayer: (String, String) -> Unit,
     onStartOrPause: () -> Unit,
@@ -1033,7 +1046,9 @@ private fun OverviewTab(
 ) {
     val workflowStatus = uiState.workflowStatus(detail.game)
     val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
-    val availableCount = detail.availability.count { it.isAvailable && !it.isInjured }
+    val availableCountByHalf = (1..detail.game.template().halfCount).associateWith { halfNumber ->
+        detail.availability.count { it.isAvailableForHalf(halfNumber) && !it.isInjured }
+    }
     val teamGoals = detail.goals.count { it.scoredBy == GoalSide.TEAM }
     val opponentGoals = detail.goals.count { it.scoredBy == GoalSide.OPPONENT }
     val goalieSummary = (1..detail.game.template().halfCount).associateWith { halfNumber ->
@@ -1061,7 +1076,9 @@ private fun OverviewTab(
                         "Lineup readiness: lineup is ready for review."
                     },
                 )
-                Text("Available players: $availableCount")
+                availableCountByHalf.forEach { (halfNumber, count) ->
+                    Text("Half $halfNumber available: $count")
+                }
                 goalieSummary.forEach { (halfNumber, goalieName) ->
                     Text("Half $halfNumber goalie: $goalieName")
                 }
@@ -1125,7 +1142,7 @@ private fun OverviewTab(
 @Composable
 private fun PlannerScreen(
     uiState: AppUiState,
-    onToggleAvailability: (String, Boolean) -> Unit,
+    onToggleAvailability: (String, Int, Boolean) -> Unit,
     onGenerateAssignments: () -> Unit,
     onUpdateManualGroupLock: (Int, PositionGroup, List<String>) -> Unit,
     onSetAssignmentPlayer: (String, String) -> Unit,
@@ -1137,10 +1154,10 @@ private fun PlannerScreen(
         return
     }
     val readOnly = detail.game.status == GameStatus.LIVE || detail.game.status == GameStatus.FINAL
-    val availabilityMap = detail.availability.associateBy({ it.playerId }, { it.isAvailable })
+    val availabilityMap = detail.availability.associateBy { it.playerId }
     val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
     val availablePlayers = detail.players
-        .filter { it.active && availabilityMap[it.playerId] != false }
+        .filter { it.active }
         .sortedBy { it.name }
     val manualLocksByHalfGroup = detail.game.manualGroupLocks()
         .associateBy({ it.halfNumber to it.positionGroup }, { it.playerIds })
@@ -1169,7 +1186,9 @@ private fun PlannerScreen(
                             "Choose players to keep in ${group.label} for this half before autofill."
                         },
                     )
-                    availablePlayers.forEach { player ->
+                    availablePlayers
+                        .filter { availabilityMap[it.playerId]?.isAvailableForHalf(halfNumber) != false }
+                        .forEach { player ->
                         FilterChip(
                             selected = player.playerId in selectedIds,
                             onClick = {
@@ -1222,7 +1241,9 @@ private fun PlannerScreen(
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Pick a player for half ${assignment.halfNumber}, round ${assignment.roundIndex}.")
                         Text("If the player is already on the field this round, the app will swap the two positions.")
-                        availablePlayers.forEach { player ->
+                        availablePlayers
+                            .filter { availabilityMap[it.playerId]?.isAvailableForHalf(assignment.halfNumber) != false }
+                            .forEach { player ->
                             val onFieldThisRound = sameRoundAssignments.any { it.playerId == player.playerId }
                             OutlinedButton(
                                 onClick = {
@@ -1296,15 +1317,34 @@ private fun PlannerScreen(
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Availability", style = MaterialTheme.typography.titleLarge)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         detail.players.filter { it.active }.forEach { player ->
-                            val available = availabilityMap[player.playerId] != false
-                            FilterChip(
-                                selected = available,
-                                onClick = { if (!readOnly) onToggleAvailability(player.playerId, !available) },
-                                label = { Text(player.name) },
-                                enabled = !readOnly,
+                            val availability = availabilityMap[player.playerId] ?: PlayerAvailabilityEntity(
+                                gameId = detail.game.gameId,
+                                playerId = player.playerId,
                             )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(player.name, modifier = Modifier.weight(1f))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    (1..detail.game.template().halfCount).forEach { halfNumber ->
+                                        val available = availability.isAvailableForHalf(halfNumber)
+                                        FilterChip(
+                                            selected = available,
+                                            onClick = {
+                                                if (!readOnly) {
+                                                    onToggleAvailability(player.playerId, halfNumber, !available)
+                                                }
+                                            },
+                                            label = { Text("H$halfNumber") },
+                                            enabled = !readOnly,
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                     if (detail.game.plannerNotes.isNotBlank()) {
@@ -1388,7 +1428,7 @@ private fun LiveScreen(
     val onFieldPlayerIds = currentAssignments.map { it.playerId }.toSet()
     val benchCandidates = activeRoster.filter { player ->
         player.playerId !in onFieldPlayerIds &&
-            availabilityByPlayer[player.playerId]?.isAvailable != false &&
+            availabilityByPlayer[player.playerId]?.isAvailableForHalf(detail.game.currentHalf) != false &&
             availabilityByPlayer[player.playerId]?.isInjured != true
     }
     val gameRemainingSeconds = (template.halfDurationMinutes * 60) - uiState.effectiveHalfElapsedSeconds

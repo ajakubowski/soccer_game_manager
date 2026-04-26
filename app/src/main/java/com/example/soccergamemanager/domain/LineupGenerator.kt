@@ -8,12 +8,6 @@ class LineupGenerator {
         manualGroupLocks: List<ManualGroupLock> = emptyList(),
     ): LineupGenerationResult {
         val warnings = mutableListOf<String>()
-        if (players.size < template.positions.size) {
-            return LineupGenerationResult(
-                assignments = emptyList(),
-                warnings = listOf("At least ${template.positions.size} available players are needed to fill every position."),
-            )
-        }
 
         val playerById = players.associateBy { it.id }
         val sanitizedLocks = sanitizeManualLocks(
@@ -23,18 +17,25 @@ class LineupGenerator {
         )
         warnings += sanitizedLocks.warnings
 
-        val halfKeeperSelections = selectKeepers(
-            players = players,
-            halfCount = template.halfCount,
-            historyByPlayer = historyByPlayer,
-            manualLocksByHalfGroup = sanitizedLocks.locksByHalfGroup,
-        )
         val firstHalfGroups = mutableMapOf<String, PositionGroup>()
         val assignments = mutableListOf<GeneratedAssignment>()
+        val selectedKeepers = mutableListOf<LineupPlayer>()
 
         repeat(template.halfCount) { halfOffset ->
             val halfNumber = halfOffset + 1
-            val keeper = halfKeeperSelections[halfOffset]
+            val availableHalfPlayers = players.filter { halfNumber in it.availableHalfNumbers }
+            if (availableHalfPlayers.size < template.positions.size) {
+                warnings += "Half $halfNumber needs at least ${template.positions.size} available players to fill every position."
+                return@repeat
+            }
+            val keeper = selectKeeperForHalf(
+                players = availableHalfPlayers,
+                halfNumber = halfNumber,
+                historyByPlayer = historyByPlayer,
+                manualLocksByHalfGroup = sanitizedLocks.locksByHalfGroup,
+                selectedKeepers = selectedKeepers,
+            )
+            selectedKeepers += keeper
             val locksForHalf = sanitizedLocks.locksByHalfGroup[halfNumber].orEmpty()
             val lockedFieldPlayersByGroup = listOf(
                 PositionGroup.DEFENSE,
@@ -43,7 +44,7 @@ class LineupGenerator {
             ).associateWith { group ->
                 locksForHalf[group].orEmpty().filterNot { it.id == keeper.id }
             }
-            val fieldPlayers = players.filterNot { it.id == keeper.id }
+            val fieldPlayers = availableHalfPlayers.filterNot { it.id == keeper.id }
             val capacities = createGroupCapacities(
                 fieldPlayerCount = fieldPlayers.size,
                 lockedCounts = lockedFieldPlayersByGroup.mapValues { it.value.size },
@@ -117,37 +118,31 @@ class LineupGenerator {
         )
     }
 
-    private fun selectKeepers(
+    private fun selectKeeperForHalf(
         players: List<LineupPlayer>,
-        halfCount: Int,
+        halfNumber: Int,
         historyByPlayer: Map<String, PlayerSeasonHistory>,
         manualLocksByHalfGroup: Map<Int, Map<PositionGroup, List<LineupPlayer>>>,
-    ): List<LineupPlayer> {
-        val keepers = mutableListOf<LineupPlayer>()
-        repeat(halfCount) {
-            val halfNumber = it + 1
-            val lockedKeeper = manualLocksByHalfGroup[halfNumber]?.get(PositionGroup.GOALIE)?.firstOrNull()
-            if (lockedKeeper != null) {
-                keepers += lockedKeeper
-                return@repeat
-            }
-            val pool = players
-                .filter { candidate ->
-                    keepers.none { it.id == candidate.id } || players.size < halfCount
-                }
-                .ifEmpty { players }
-
-            val keeper = pool.minWithOrNull(
-                compareBy<LineupPlayer>(
-                    { if (it.preferredKeeper) 0 else 1 },
-                    { historyByPlayer[it.id]?.keeperAssignments ?: 0 },
-                    { historyByPlayer[it.id]?.minutesPlayed ?: 0.0 },
-                    { it.name },
-                ),
-            ) ?: players.first()
-            keepers += keeper
+        selectedKeepers: List<LineupPlayer>,
+    ): LineupPlayer {
+        val lockedKeeper = manualLocksByHalfGroup[halfNumber]?.get(PositionGroup.GOALIE)?.firstOrNull()
+        if (lockedKeeper != null) {
+            return lockedKeeper
         }
-        return keepers
+        val pool = players
+            .filter { candidate ->
+                selectedKeepers.none { it.id == candidate.id } || players.size <= selectedKeepers.size + 1
+            }
+            .ifEmpty { players }
+
+        return pool.minWithOrNull(
+            compareBy<LineupPlayer>(
+                { if (it.preferredKeeper) 0 else 1 },
+                { historyByPlayer[it.id]?.keeperAssignments ?: 0 },
+                { historyByPlayer[it.id]?.minutesPlayed ?: 0.0 },
+                { it.name },
+            ),
+        ) ?: players.first()
     }
 
     private fun createGroupCapacities(
@@ -270,6 +265,10 @@ class LineupGenerator {
                         val player = playerById[playerId]
                         if (player == null) {
                             warnings += "Ignored a manual lock for an unavailable player in half $halfNumber ${group.label}."
+                            return@forEach
+                        }
+                        if (halfNumber !in player.availableHalfNumbers) {
+                            warnings += "Ignored a manual lock for ${player.name} in half $halfNumber because that player is unavailable that half."
                             return@forEach
                         }
                         if (!takenPlayerIds.add(playerId)) {

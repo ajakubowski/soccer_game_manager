@@ -37,12 +37,19 @@ data class AppUiState(
     val teamMetrics: TeamMetrics? = null,
     val report: PrintableReport? = null,
     val transientMessage: String? = null,
+    val orientationLockMode: OrientationLockMode = OrientationLockMode.AUTO,
     val clockRunning: Boolean = false,
     val effectiveHalfElapsedSeconds: Int = 0,
     val effectiveRoundElapsedSeconds: Int = 0,
 ) {
     val selectedSeason: SeasonEntity?
         get() = seasons.firstOrNull { it.seasonId == selectedSeasonId }
+}
+
+enum class OrientationLockMode(val label: String) {
+    AUTO("Auto rotate"),
+    PORTRAIT("Lock portrait"),
+    LANDSCAPE("Lock landscape"),
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -61,6 +68,8 @@ class MainViewModel(
 
     private val selectedSeasonFlow = settingsStore.selectedSeasonId
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    private val orientationLockFlow = settingsStore.orientationLockMode
+        .stateIn(viewModelScope, SharingStarted.Eagerly, OrientationLockMode.AUTO)
     private val seasonsFlow = repository.observeSeasons()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private val playersFlow = selectedSeasonFlow
@@ -137,7 +146,7 @@ class MainViewModel(
         )
     }
 
-    val uiState: StateFlow<AppUiState> = combine(baseUiFlow, runtimeUiFlow) { base, runtime ->
+    val uiState: StateFlow<AppUiState> = combine(baseUiFlow, runtimeUiFlow, orientationLockFlow) { base, runtime, orientationLock ->
         AppUiState(
             seasons = base.seasons,
             selectedSeasonId = base.selectedSeasonId,
@@ -149,6 +158,7 @@ class MainViewModel(
             teamMetrics = runtime.teamMetrics,
             report = runtime.report,
             transientMessage = runtime.transientMessage,
+            orientationLockMode = orientationLock,
             clockRunning = runtime.clockRunning,
             effectiveHalfElapsedSeconds = runtime.halfElapsedOverride
                 ?: base.selectedGameDetail?.game?.elapsedSecondsInHalf
@@ -272,6 +282,13 @@ class MainViewModel(
         }
     }
 
+    fun updateOrientationLock(mode: OrientationLockMode) {
+        launchTask {
+            settingsStore.setOrientationLockMode(mode)
+            message.value = "Orientation setting updated."
+        }
+    }
+
     fun togglePlayerActive(player: PlayerEntity) {
         launchTask {
             repository.togglePlayerActive(player)
@@ -320,10 +337,10 @@ class MainViewModel(
         selectedGameId.value = gameId
     }
 
-    fun toggleAvailability(playerId: String, available: Boolean) {
+    fun toggleAvailability(playerId: String, halfNumber: Int, available: Boolean) {
         val gameId = selectedGameId.value ?: return
         launchTask {
-            repository.setPlayerAvailability(gameId, playerId, available)
+            repository.setPlayerAvailability(gameId, playerId, halfNumber, available)
         }
     }
 
