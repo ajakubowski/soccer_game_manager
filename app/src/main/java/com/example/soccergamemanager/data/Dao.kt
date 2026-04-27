@@ -18,6 +18,9 @@ interface SeasonDao {
     @Query("SELECT * FROM seasons ORDER BY year DESC, createdAt DESC")
     fun observeSeasons(): Flow<List<SeasonEntity>>
 
+    @Query("SELECT * FROM seasons ORDER BY year DESC, createdAt DESC")
+    suspend fun getAllSeasons(): List<SeasonEntity>
+
     @Query("SELECT * FROM seasons WHERE seasonId = :seasonId LIMIT 1")
     suspend fun getSeason(seasonId: String): SeasonEntity?
 
@@ -26,6 +29,9 @@ interface SeasonDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSeason(season: SeasonEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSeasons(seasons: List<SeasonEntity>)
 
     @Update
     suspend fun updateSeason(season: SeasonEntity)
@@ -42,8 +48,14 @@ interface PlayerDao {
     @Query("SELECT * FROM players WHERE seasonId = :seasonId ORDER BY name ASC")
     suspend fun getPlayersBySeason(seasonId: String): List<PlayerEntity>
 
+    @Query("SELECT * FROM players ORDER BY seasonId, name ASC")
+    suspend fun getAllPlayers(): List<PlayerEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPlayer(player: PlayerEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPlayers(players: List<PlayerEntity>)
 
     @Update
     suspend fun updatePlayer(player: PlayerEntity)
@@ -60,11 +72,17 @@ interface GameDao {
     @Query("SELECT * FROM games WHERE gameId = :gameId LIMIT 1")
     suspend fun getGame(gameId: String): GameEntity?
 
+    @Query("SELECT * FROM games ORDER BY seasonId, scheduledAt DESC")
+    suspend fun getAllGames(): List<GameEntity>
+
     @Query("SELECT * FROM games WHERE seasonId = :seasonId AND status = 'FINAL'")
     suspend fun getFinalizedGamesBySeason(seasonId: String): List<GameEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertGame(game: GameEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertGames(games: List<GameEntity>)
 
     @Update
     suspend fun updateGame(game: GameEntity)
@@ -81,6 +99,9 @@ interface AvailabilityDao {
     @Query("SELECT * FROM player_availability WHERE gameId = :gameId")
     suspend fun getByGame(gameId: String): List<PlayerAvailabilityEntity>
 
+    @Query("SELECT * FROM player_availability")
+    suspend fun getAll(): List<PlayerAvailabilityEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(items: List<PlayerAvailabilityEntity>)
 }
@@ -92,6 +113,9 @@ interface AssignmentDao {
 
     @Query("SELECT * FROM assignments WHERE gameId = :gameId ORDER BY halfNumber, roundIndex")
     suspend fun getByGame(gameId: String): List<AssignmentEntity>
+
+    @Query("SELECT * FROM assignments ORDER BY gameId, halfNumber, roundIndex")
+    suspend fun getAll(): List<AssignmentEntity>
 
     @Query("SELECT * FROM assignments WHERE assignmentId = :assignmentId LIMIT 1")
     suspend fun getAssignment(assignmentId: String): AssignmentEntity?
@@ -139,8 +163,23 @@ interface GoalDao {
     @Query("SELECT * FROM goal_events WHERE gameId = :gameId ORDER BY createdAt ASC")
     suspend fun getByGame(gameId: String): List<GoalEventEntity>
 
+    @Query("SELECT * FROM goal_events WHERE goalEventId = :goalEventId LIMIT 1")
+    suspend fun getGoal(goalEventId: String): GoalEventEntity?
+
+    @Query("SELECT * FROM goal_events ORDER BY gameId, createdAt ASC")
+    suspend fun getAll(): List<GoalEventEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertGoal(goal: GoalEventEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertGoals(goals: List<GoalEventEntity>)
+
+    @Update
+    suspend fun updateGoal(goal: GoalEventEntity)
+
+    @Delete
+    suspend fun deleteGoal(goal: GoalEventEntity)
 
     @Query(
         """

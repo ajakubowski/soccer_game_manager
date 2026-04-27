@@ -45,7 +45,7 @@ class ReportFormatter {
                 appendLine("Half $half")
                 for (round in 1..template.roundsPerHalf) {
                     appendLine("  Round $round")
-                    template.positions.forEach { position ->
+                    template.activePositions.forEach { position ->
                         val assignment = assignments.firstOrNull {
                             it.halfNumber == half && it.roundIndex == round && it.position == position
                         }
@@ -70,11 +70,11 @@ class ReportFormatter {
             for (half in 1..template.halfCount) {
                 append("<h3>Half $half</h3>")
                 append("<table><thead><tr><th>Round</th>")
-                template.positions.forEach { append("<th>${it.label}</th>") }
+                template.activePositions.forEach { append("<th>${it.label}</th>") }
                 append("</tr></thead><tbody>")
                 for (round in 1..template.roundsPerHalf) {
                     append("<tr><td>$round</td>")
-                    template.positions.forEach { position ->
+                    template.activePositions.forEach { position ->
                         val assignment = assignments.firstOrNull {
                             it.halfNumber == half && it.roundIndex == round && it.position == position
                         }

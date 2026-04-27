@@ -10,6 +10,7 @@ import com.example.soccergamemanager.domain.GameTemplateConfig
 import com.example.soccergamemanager.domain.GoalSide
 import com.example.soccergamemanager.domain.ManualGroupLock
 import com.example.soccergamemanager.domain.PositionGroup
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -19,6 +20,7 @@ val appJson = Json {
 }
 
 @Entity(tableName = "seasons")
+@Serializable
 data class SeasonEntity(
     @PrimaryKey val seasonId: String,
     val name: String,
@@ -39,6 +41,7 @@ data class SeasonEntity(
     ],
     indices = [Index("seasonId")],
 )
+@Serializable
 data class PlayerEntity(
     @PrimaryKey val playerId: String,
     val seasonId: String,
@@ -61,6 +64,7 @@ data class PlayerEntity(
     ],
     indices = [Index("seasonId")],
 )
+@Serializable
 data class GameEntity(
     @PrimaryKey val gameId: String,
     val seasonId: String,
@@ -100,6 +104,7 @@ data class GameEntity(
     ],
     indices = [Index("playerId")],
 )
+@Serializable
 data class PlayerAvailabilityEntity(
     val gameId: String,
     val playerId: String,
@@ -137,6 +142,7 @@ fun PlayerAvailabilityEntity.isAvailableForHalf(halfNumber: Int): Boolean = when
         ),
     ],
 )
+@Serializable
 data class AssignmentEntity(
     @PrimaryKey val assignmentId: String,
     val gameId: String,
@@ -159,6 +165,7 @@ data class AssignmentEntity(
         ),
     ],
 )
+@Serializable
 data class GoalEventEntity(
     @PrimaryKey val goalEventId: String,
     val gameId: String,

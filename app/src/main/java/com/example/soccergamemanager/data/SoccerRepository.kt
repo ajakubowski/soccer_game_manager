@@ -4,6 +4,8 @@ import com.example.soccergamemanager.domain.GameStatus
 import com.example.soccergamemanager.domain.GameTemplateConfig
 import com.example.soccergamemanager.domain.GoalSide
 import com.example.soccergamemanager.domain.FieldPosition
+import com.example.soccergamemanager.domain.FormationConfig
+import com.example.soccergamemanager.domain.FormationType
 import com.example.soccergamemanager.domain.LineupGenerationResult
 import com.example.soccergamemanager.domain.LineupGenerator
 import com.example.soccergamemanager.domain.LineupPlayer
@@ -20,6 +22,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SoccerRepository(
@@ -47,6 +51,33 @@ class SoccerRepository(
                 counts.associate { it.gameId to it.assignmentCount }
             }
         } ?: flowOf(emptyMap())
+
+    suspend fun exportBackupJson(): String = appJson.encodeToString(
+        SoccerDataBackup(
+            seasons = seasonDao.getAllSeasons(),
+            players = playerDao.getAllPlayers(),
+            games = gameDao.getAllGames(),
+            availability = availabilityDao.getAll(),
+            assignments = assignmentDao.getAll(),
+            goals = goalDao.getAll(),
+        ),
+    )
+
+    suspend fun importBackupJson(json: String): String? {
+        val backup = appJson.decodeFromString<SoccerDataBackup>(json)
+        if (backup.seasons.isEmpty()) return null
+
+        seasonDao.insertSeasons(backup.seasons)
+        playerDao.insertPlayers(backup.players)
+        gameDao.insertGames(backup.games)
+        availabilityDao.upsertAll(backup.availability)
+        assignmentDao.insertAll(backup.assignments)
+        goalDao.insertGoals(backup.goals)
+
+        return backup.seasons.sortedWith(compareByDescending<SeasonEntity> { it.year }.thenByDescending { it.createdAt })
+            .firstOrNull()
+            ?.seasonId
+    }
 
     fun observeGameDetail(gameId: String?): Flow<GameDetail?> {
         if (gameId == null) return flowOf(null)
@@ -151,6 +182,31 @@ class SoccerRepository(
                 defaultTemplateJson = updatedTemplate.toJson(),
             ),
         )
+    }
+
+    suspend fun updateGameFormation(gameId: String, formationType: FormationType): Boolean {
+        val game = gameDao.getGame(gameId) ?: return false
+        if (game.status == GameStatus.LIVE || game.status == GameStatus.FINAL) return false
+
+        val formation = FormationConfig.forType(formationType)
+        val activeGroups = formation.groupOrder.toSet()
+        val prunedLocks = game.manualGroupLocks()
+            .filter { it.positionGroup in activeGroups }
+        val updatedTemplate = game.template().copy(
+            formationType = formationType,
+            positions = formation.positions,
+        )
+
+        assignmentDao.deleteByGame(gameId)
+        gameDao.updateGame(
+            game.copy(
+                status = GameStatus.PLANNED,
+                templateJson = updatedTemplate.toJson(),
+                manualGroupLocksJson = prunedLocks.toJson(),
+                plannerNotes = "",
+            ),
+        )
+        return true
     }
 
     suspend fun updateSeason(season: SeasonEntity, name: String, year: Int) {
@@ -451,6 +507,36 @@ class SoccerRepository(
         assignmentDao.updateAssignments(updates)
     }
 
+    suspend fun setAssignmentPosition(assignmentId: String, newPosition: FieldPosition) {
+        val assignment = assignmentDao.getAssignment(assignmentId) ?: return
+        val game = gameDao.getGame(assignment.gameId) ?: return
+        val template = game.template()
+        if (newPosition !in template.activePositions) return
+
+        val newGroup = template.formation.groupForPosition(newPosition)
+        val roundAssignments = assignmentDao.getByRound(game.gameId, assignment.halfNumber, assignment.roundIndex)
+        val swapAssignment = roundAssignments.firstOrNull {
+            it.assignmentId != assignment.assignmentId && it.position == newPosition
+        }
+        val updates = buildList {
+            add(
+                assignment.copy(
+                    position = newPosition,
+                    positionGroup = newGroup,
+                ),
+            )
+            if (swapAssignment != null) {
+                add(
+                    swapAssignment.copy(
+                        position = assignment.position,
+                        positionGroup = template.formation.groupForPosition(assignment.position),
+                    ),
+                )
+            }
+        }
+        assignmentDao.updateAssignments(updates)
+    }
+
     suspend fun applyLiveSub(assignmentId: String, replacementPlayerId: String) {
         val assignment = assignmentDao.getAssignment(assignmentId) ?: return
         val game = gameDao.getGame(assignment.gameId) ?: return
@@ -595,6 +681,38 @@ class SoccerRepository(
         )
     }
 
+    suspend fun updateGoal(
+        goalEventId: String,
+        side: GoalSide,
+        scorerPlayerId: String?,
+        assisterPlayerId: String?,
+        notes: String?,
+        halfNumber: Int,
+        elapsedSeconds: Int,
+    ) {
+        val goal = goalDao.getGoal(goalEventId) ?: return
+        val game = gameDao.getGame(goal.gameId) ?: return
+        val clampedHalf = halfNumber.coerceIn(1, game.template().halfCount)
+        val clampedSeconds = elapsedSeconds.coerceIn(0, game.template().halfDurationMinutes * 60)
+        val roundIndex = inferRoundIndex(game.template(), clampedSeconds)
+        goalDao.updateGoal(
+            goal.copy(
+                scoredBy = side,
+                scorerPlayerId = if (side == GoalSide.TEAM) scorerPlayerId else null,
+                assisterPlayerId = if (side == GoalSide.TEAM && assisterPlayerId != scorerPlayerId) assisterPlayerId else null,
+                notes = notes?.trim().orEmpty(),
+                halfNumber = clampedHalf,
+                roundIndex = roundIndex,
+                elapsedSecondsInHalf = clampedSeconds,
+            ),
+        )
+    }
+
+    suspend fun deleteGoal(goalEventId: String) {
+        val goal = goalDao.getGoal(goalEventId) ?: return
+        goalDao.deleteGoal(goal)
+    }
+
     suspend fun finalizeGame(gameId: String) {
         val game = gameDao.getGame(gameId) ?: return
         gameDao.updateGame(
@@ -604,6 +722,12 @@ class SoccerRepository(
                 lockedAt = game.lockedAt ?: System.currentTimeMillis(),
             ),
         )
+    }
+
+    private fun inferRoundIndex(template: GameTemplateConfig, elapsedSeconds: Int): Int {
+        val secondsPerRound = ((template.halfDurationMinutes * 60).toDouble() / template.roundsPerHalf.toDouble())
+            .coerceAtLeast(1.0)
+        return ((elapsedSeconds / secondsPerRound).toInt() + 1).coerceIn(1, template.roundsPerHalf)
     }
 
     suspend fun calculateMetrics(seasonId: String) = metricsCalculator.calculate(
@@ -858,9 +982,15 @@ class SoccerRepository(
         preferredPositionOverride: FieldPosition? = null,
     ): List<com.example.soccergamemanager.domain.FieldPosition> {
         val positionsInGroup = when (targetGroup) {
+            PositionGroup.ATTACK -> listOf(
+                com.example.soccergamemanager.domain.FieldPosition.STRIKER,
+                com.example.soccergamemanager.domain.FieldPosition.LEFT_MIDFIELDER,
+                com.example.soccergamemanager.domain.FieldPosition.RIGHT_MIDFIELDER,
+            )
             PositionGroup.GOALIE -> listOf(com.example.soccergamemanager.domain.FieldPosition.GOALIE)
             PositionGroup.DEFENSE -> listOf(
                 com.example.soccergamemanager.domain.FieldPosition.LEFT_DEFENSE,
+                com.example.soccergamemanager.domain.FieldPosition.CENTER_DEFENSE,
                 com.example.soccergamemanager.domain.FieldPosition.RIGHT_DEFENSE,
             )
             PositionGroup.LR_MID -> listOf(

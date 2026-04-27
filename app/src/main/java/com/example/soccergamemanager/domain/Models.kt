@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 enum class PositionGroup(val label: String) {
+    ATTACK("Attack"),
     DEFENSE("Defense"),
     LR_MID("L/R Mid"),
     CM_STRIKER("CM/Striker"),
@@ -14,11 +15,74 @@ enum class PositionGroup(val label: String) {
 enum class FieldPosition(val label: String, val group: PositionGroup) {
     GOALIE("Goalie", PositionGroup.GOALIE),
     LEFT_DEFENSE("Left Defense", PositionGroup.DEFENSE),
+    CENTER_DEFENSE("Center Defense", PositionGroup.DEFENSE),
     RIGHT_DEFENSE("Right Defense", PositionGroup.DEFENSE),
     LEFT_MIDFIELDER("Left Midfielder", PositionGroup.LR_MID),
     CENTER_MIDFIELDER("Center Midfielder", PositionGroup.CM_STRIKER),
     RIGHT_MIDFIELDER("Right Midfielder", PositionGroup.LR_MID),
     STRIKER("Striker", PositionGroup.CM_STRIKER),
+}
+
+@Serializable
+enum class FormationType(val label: String, val description: String) {
+    CLASSIC_U9("Classic U9", "Defense / L-R Mid / CM-Striker"),
+    ATTACK_BACK_THREE("Attack + Back Three", "Attack / Defense / Goalie"),
+}
+
+data class FormationConfig(
+    val type: FormationType,
+    val positions: List<FieldPosition>,
+    val groupOrder: List<PositionGroup>,
+    val positionsByGroup: Map<PositionGroup, List<FieldPosition>>,
+) {
+    val fieldGroups: List<PositionGroup> = groupOrder.filterNot { it == PositionGroup.GOALIE }
+
+    fun groupForPosition(position: FieldPosition): PositionGroup =
+        positionsByGroup.entries.firstOrNull { (_, positions) -> position in positions }?.key ?: position.group
+
+    companion object {
+        fun forType(type: FormationType): FormationConfig = when (type) {
+            FormationType.CLASSIC_U9 -> FormationConfig(
+                type = type,
+                positions = GameTemplateConfig.CLASSIC_U9_POSITIONS,
+                groupOrder = listOf(
+                    PositionGroup.DEFENSE,
+                    PositionGroup.LR_MID,
+                    PositionGroup.CM_STRIKER,
+                    PositionGroup.GOALIE,
+                ),
+                positionsByGroup = mapOf(
+                    PositionGroup.DEFENSE to listOf(FieldPosition.LEFT_DEFENSE, FieldPosition.RIGHT_DEFENSE),
+                    PositionGroup.LR_MID to listOf(FieldPosition.LEFT_MIDFIELDER, FieldPosition.RIGHT_MIDFIELDER),
+                    PositionGroup.CM_STRIKER to listOf(FieldPosition.CENTER_MIDFIELDER, FieldPosition.STRIKER),
+                    PositionGroup.GOALIE to listOf(FieldPosition.GOALIE),
+                ),
+            )
+
+            FormationType.ATTACK_BACK_THREE -> FormationConfig(
+                type = type,
+                positions = GameTemplateConfig.ATTACK_BACK_THREE_POSITIONS,
+                groupOrder = listOf(
+                    PositionGroup.ATTACK,
+                    PositionGroup.DEFENSE,
+                    PositionGroup.GOALIE,
+                ),
+                positionsByGroup = mapOf(
+                    PositionGroup.ATTACK to listOf(
+                        FieldPosition.STRIKER,
+                        FieldPosition.LEFT_MIDFIELDER,
+                        FieldPosition.RIGHT_MIDFIELDER,
+                    ),
+                    PositionGroup.DEFENSE to listOf(
+                        FieldPosition.LEFT_DEFENSE,
+                        FieldPosition.CENTER_DEFENSE,
+                        FieldPosition.RIGHT_DEFENSE,
+                    ),
+                    PositionGroup.GOALIE to listOf(FieldPosition.GOALIE),
+                ),
+            )
+        }
+    }
 }
 
 @Serializable
@@ -43,8 +107,15 @@ data class GameTemplateConfig(
     val substitutionWindowMinutes: Int = 4,
     val substitutionEventsPerHalf: Int = 3,
     val nextSubAlertSeconds: Int = 60,
+    val formationType: FormationType = FormationType.CLASSIC_U9,
     val positions: List<FieldPosition> = DEFAULT_POSITIONS,
 ) {
+    val formation: FormationConfig
+        get() = FormationConfig.forType(formationType)
+
+    val activePositions: List<FieldPosition>
+        get() = formation.positions
+
     val roundsPerHalf: Int
         get() {
             val minutesPerRound = substitutionWindowMinutes.coerceAtLeast(1)
@@ -53,7 +124,7 @@ data class GameTemplateConfig(
         }
 
     companion object {
-        val DEFAULT_POSITIONS = listOf(
+        val CLASSIC_U9_POSITIONS = listOf(
             FieldPosition.LEFT_DEFENSE,
             FieldPosition.RIGHT_DEFENSE,
             FieldPosition.LEFT_MIDFIELDER,
@@ -62,6 +133,29 @@ data class GameTemplateConfig(
             FieldPosition.STRIKER,
             FieldPosition.GOALIE,
         )
+
+        val ATTACK_BACK_THREE_POSITIONS = listOf(
+            FieldPosition.STRIKER,
+            FieldPosition.LEFT_MIDFIELDER,
+            FieldPosition.RIGHT_MIDFIELDER,
+            FieldPosition.LEFT_DEFENSE,
+            FieldPosition.CENTER_DEFENSE,
+            FieldPosition.RIGHT_DEFENSE,
+            FieldPosition.GOALIE,
+        )
+
+        val ALL_POSITIONS = listOf(
+            FieldPosition.LEFT_DEFENSE,
+            FieldPosition.CENTER_DEFENSE,
+            FieldPosition.RIGHT_DEFENSE,
+            FieldPosition.LEFT_MIDFIELDER,
+            FieldPosition.CENTER_MIDFIELDER,
+            FieldPosition.RIGHT_MIDFIELDER,
+            FieldPosition.STRIKER,
+            FieldPosition.GOALIE,
+        )
+
+        val DEFAULT_POSITIONS = CLASSIC_U9_POSITIONS
 
         fun defaultU9() = GameTemplateConfig()
     }

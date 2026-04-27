@@ -1,6 +1,7 @@
 package com.example.soccergamemanager
 
 import com.example.soccergamemanager.domain.FieldPosition
+import com.example.soccergamemanager.domain.FormationType
 import com.example.soccergamemanager.domain.GameTemplateConfig
 import com.example.soccergamemanager.domain.LineupGenerator
 import com.example.soccergamemanager.domain.LineupPlayer
@@ -123,6 +124,69 @@ class LineupGeneratorTest {
             setOf("p5"),
             result.assignments.filter { it.halfNumber == 2 && it.position == FieldPosition.GOALIE }.map { it.playerId }.toSet(),
         )
+    }
+
+    @Test
+    fun attack_back_three_formation_generates_attack_and_three_defender_groups() {
+        val players = (1..12).map { index ->
+            LineupPlayer(
+                id = "p$index",
+                name = "Player $index",
+                preferredKeeper = index <= 2,
+            )
+        }
+        val template = GameTemplateConfig.defaultU9().copy(
+            formationType = FormationType.ATTACK_BACK_THREE,
+            positions = GameTemplateConfig.ATTACK_BACK_THREE_POSITIONS,
+        )
+
+        val result = generator.generate(template, players, emptyMap())
+
+        assertTrue(result.warnings.isEmpty())
+        (1..2).forEach { half ->
+            (1..template.roundsPerHalf).forEach { round ->
+                val roundAssignments = result.assignments.filter { it.halfNumber == half && it.roundIndex == round }
+                assertEquals(7, roundAssignments.size)
+                assertEquals(
+                    setOf(
+                        FieldPosition.STRIKER,
+                        FieldPosition.LEFT_MIDFIELDER,
+                        FieldPosition.RIGHT_MIDFIELDER,
+                        FieldPosition.LEFT_DEFENSE,
+                        FieldPosition.CENTER_DEFENSE,
+                        FieldPosition.RIGHT_DEFENSE,
+                        FieldPosition.GOALIE,
+                    ),
+                    roundAssignments.map { it.position }.toSet(),
+                )
+                assertEquals(
+                    setOf(PositionGroup.ATTACK),
+                    roundAssignments
+                        .filter {
+                            it.position in listOf(
+                                FieldPosition.STRIKER,
+                                FieldPosition.LEFT_MIDFIELDER,
+                                FieldPosition.RIGHT_MIDFIELDER,
+                            )
+                        }
+                        .map { it.positionGroup }
+                        .toSet(),
+                )
+                assertEquals(
+                    setOf(PositionGroup.DEFENSE),
+                    roundAssignments
+                        .filter {
+                            it.position in listOf(
+                                FieldPosition.LEFT_DEFENSE,
+                                FieldPosition.CENTER_DEFENSE,
+                                FieldPosition.RIGHT_DEFENSE,
+                            )
+                        }
+                        .map { it.positionGroup }
+                        .toSet(),
+                )
+            }
+        }
     }
 
     @Test

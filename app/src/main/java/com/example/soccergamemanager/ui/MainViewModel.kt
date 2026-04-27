@@ -9,8 +9,10 @@ import com.example.soccergamemanager.data.PlayerEntity
 import com.example.soccergamemanager.data.SeasonEntity
 import com.example.soccergamemanager.data.SettingsStore
 import com.example.soccergamemanager.data.SoccerRepository
+import com.example.soccergamemanager.domain.FieldPosition
 import com.example.soccergamemanager.domain.GameStatus
 import com.example.soccergamemanager.domain.GoalSide
+import com.example.soccergamemanager.domain.FormationType
 import com.example.soccergamemanager.domain.PositionGroup
 import com.example.soccergamemanager.domain.PrintableReport
 import com.example.soccergamemanager.domain.TeamMetrics
@@ -289,6 +291,26 @@ class MainViewModel(
         }
     }
 
+    fun exportBackup(onReady: (String) -> Unit) {
+        launchTask {
+            onReady(repository.exportBackupJson())
+            message.value = "Backup export ready."
+        }
+    }
+
+    fun importBackup(json: String) {
+        launchTask {
+            val selectedImportedSeasonId = repository.importBackupJson(json)
+            if (selectedImportedSeasonId != null) {
+                settingsStore.setSelectedSeasonId(selectedImportedSeasonId)
+            }
+            selectedGameId.value = null
+            report.value = null
+            refreshMetrics()
+            message.value = "Backup imported."
+        }
+    }
+
     fun togglePlayerActive(player: PlayerEntity) {
         launchTask {
             repository.togglePlayerActive(player)
@@ -396,6 +418,30 @@ class MainViewModel(
         }
     }
 
+    fun updateGameFormation(formationType: FormationType, regenerate: Boolean) {
+        val gameId = selectedGameId.value ?: return
+        launchTask {
+            val updated = repository.updateGameFormation(gameId, formationType)
+            if (!updated) {
+                message.value = "Formation can only be changed before the game is live."
+                return@launchTask
+            }
+            if (regenerate) {
+                val result = repository.generateAssignments(gameId)
+                refreshReport()
+                refreshMetrics()
+                message.value = if (result.warnings.isEmpty()) {
+                    "Formation updated and lineup regenerated."
+                } else {
+                    result.warnings.joinToString("\n")
+                }
+            } else {
+                refreshReport()
+                message.value = "Formation updated."
+            }
+        }
+    }
+
     fun updateManualGroupLock(halfNumber: Int, positionGroup: PositionGroup, playerIds: List<String>) {
         val gameId = selectedGameId.value ?: return
         launchTask {
@@ -415,6 +461,15 @@ class MainViewModel(
         launchTask {
             repository.setAssignmentPlayer(assignmentId, replacementPlayerId)
             refreshReport()
+        }
+    }
+
+    fun setAssignmentPosition(assignmentId: String, position: FieldPosition) {
+        launchTask {
+            repository.setAssignmentPosition(assignmentId, position)
+            refreshReport()
+            refreshMetrics()
+            message.value = "Position corrected."
         }
     }
 
@@ -528,6 +583,40 @@ class MainViewModel(
             )
             refreshMetrics()
             refreshReport()
+        }
+    }
+
+    fun updateGoal(
+        goalEventId: String,
+        side: GoalSide,
+        scorerPlayerId: String?,
+        assisterPlayerId: String?,
+        notes: String?,
+        halfNumber: Int,
+        elapsedSeconds: Int,
+    ) {
+        launchTask {
+            repository.updateGoal(
+                goalEventId = goalEventId,
+                side = side,
+                scorerPlayerId = scorerPlayerId,
+                assisterPlayerId = assisterPlayerId,
+                notes = notes,
+                halfNumber = halfNumber,
+                elapsedSeconds = elapsedSeconds,
+            )
+            refreshMetrics()
+            refreshReport()
+            message.value = "Goal updated."
+        }
+    }
+
+    fun deleteGoal(goalEventId: String) {
+        launchTask {
+            repository.deleteGoal(goalEventId)
+            refreshMetrics()
+            refreshReport()
+            message.value = "Goal removed."
         }
     }
 
