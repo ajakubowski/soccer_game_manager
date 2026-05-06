@@ -180,6 +180,7 @@ data class ManualGroupLock(
     val halfNumber: Int,
     val positionGroup: PositionGroup,
     val playerIds: List<String> = emptyList(),
+    val lockedPosition: FieldPosition? = null,
 )
 
 data class GeneratedAssignment(

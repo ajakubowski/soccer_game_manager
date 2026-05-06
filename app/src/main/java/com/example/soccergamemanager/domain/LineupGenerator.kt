@@ -42,8 +42,14 @@ class LineupGenerator {
             )
             selectedKeepers += keeper
             val locksForHalf = sanitizedLocks.locksByHalfGroup[halfNumber].orEmpty()
+            val positionLocksForHalf = sanitizedLocks.locksByHalfPosition[halfNumber].orEmpty()
             val lockedFieldPlayersByGroup = formation.fieldGroups.associateWith { group ->
-                locksForHalf[group].orEmpty().filterNot { it.id == keeper.id }
+                val lockedPositionPlayers = formation.positionsByGroup[group]
+                    .orEmpty()
+                    .flatMap { positionLocksForHalf[it].orEmpty() }
+                (locksForHalf[group].orEmpty() + lockedPositionPlayers)
+                    .distinctBy { it.id }
+                    .filterNot { it.id == keeper.id }
             }
             val fieldPlayers = availableHalfPlayers.filterNot { it.id == keeper.id }
             val capacities = createGroupCapacities(
@@ -100,6 +106,11 @@ class LineupGenerator {
                     roundsPerHalf = template.roundsPerHalf,
                     positions = formation.positionsByGroup[group].orEmpty(),
                     positionGroup = group,
+                    lockedPlayerIdsByPosition = formation.positionsByGroup[group]
+                        .orEmpty()
+                        .associateWith { position ->
+                            positionLocksForHalf[position].orEmpty().map { it.id }.toSet()
+                        },
                     players = groupedPlayers[group].orEmpty(),
                     historyByPlayer = historyByPlayer,
                     variationSeed = variationSeed,
@@ -246,7 +257,9 @@ class LineupGenerator {
     ): SanitizedLocks {
         val warnings = mutableListOf<String>()
         val locksByHalfGroup = mutableMapOf<Int, MutableMap<PositionGroup, List<LineupPlayer>>>()
+        val locksByHalfPosition = mutableMapOf<Int, MutableMap<FieldPosition, List<LineupPlayer>>>()
         val activeGroups = formation.groupOrder.toSet()
+        val activePositions = formation.positions.toSet()
 
         manualGroupLocks
             .groupBy { it.halfNumber }
@@ -257,10 +270,40 @@ class LineupGenerator {
                 }
                 val takenPlayerIds = mutableSetOf<String>()
                 val groupsForHalf = mutableMapOf<PositionGroup, List<LineupPlayer>>()
+                val positionsForHalf = mutableMapOf<FieldPosition, List<LineupPlayer>>()
+
+                formation.positions.forEach { position ->
+                    val requestedIds = halfLocks
+                        .filter { it.lockedPosition == position }
+                        .flatMap { it.playerIds }
+                        .distinct()
+
+                    val selectedPlayers = mutableListOf<LineupPlayer>()
+                    requestedIds.forEach { playerId ->
+                        val player = playerById[playerId]
+                        if (player == null) {
+                            warnings += "Ignored a manual lock for an unavailable player in half $halfNumber ${position.label}."
+                            return@forEach
+                        }
+                        if (halfNumber !in player.availableHalfNumbers) {
+                            warnings += "Ignored a manual lock for ${player.name} in half $halfNumber because that player is unavailable that half."
+                            return@forEach
+                        }
+                        if (!takenPlayerIds.add(playerId)) {
+                            warnings += "Ignored duplicate manual lock for ${player.name} in half $halfNumber."
+                            return@forEach
+                        }
+                        selectedPlayers += player
+                    }
+
+                    if (selectedPlayers.isNotEmpty()) {
+                        positionsForHalf[position] = selectedPlayers
+                    }
+                }
 
                 formation.groupOrder.forEach { group ->
                     val requestedIds = halfLocks
-                        .filter { it.positionGroup == group }
+                        .filter { it.positionGroup == group && it.lockedPosition == null }
                         .flatMap { it.playerIds }
                         .distinct()
 
@@ -294,23 +337,32 @@ class LineupGenerator {
                     }
                 }
                 halfLocks
-                    .filterNot { it.positionGroup in activeGroups }
+                    .filter { it.lockedPosition != null && it.lockedPosition !in activePositions }
+                    .filter { it.playerIds.isNotEmpty() }
+                    .forEach { lock ->
+                        warnings += "Ignored ${lock.lockedPosition?.label.orEmpty()} locks because that position is not used by ${formation.type.label}."
+                    }
+                halfLocks
+                    .filter { it.lockedPosition == null && it.positionGroup !in activeGroups }
                     .filter { it.playerIds.isNotEmpty() }
                     .forEach { lock ->
                         warnings += "Ignored ${lock.positionGroup.label} locks because that group is not used by ${formation.type.label}."
                     }
 
                 locksByHalfGroup[halfNumber] = groupsForHalf
+                locksByHalfPosition[halfNumber] = positionsForHalf
             }
 
         return SanitizedLocks(
             locksByHalfGroup = locksByHalfGroup,
+            locksByHalfPosition = locksByHalfPosition,
             warnings = warnings,
         )
     }
 
     private data class SanitizedLocks(
         val locksByHalfGroup: Map<Int, Map<PositionGroup, List<LineupPlayer>>>,
+        val locksByHalfPosition: Map<Int, Map<FieldPosition, List<LineupPlayer>>>,
         val warnings: List<String>,
     )
 
@@ -319,6 +371,7 @@ class LineupGenerator {
         roundsPerHalf: Int,
         positions: List<FieldPosition>,
         positionGroup: PositionGroup,
+        lockedPlayerIdsByPosition: Map<FieldPosition, Set<String>>,
         players: List<LineupPlayer>,
         historyByPlayer: Map<String, PlayerSeasonHistory>,
         variationSeed: Int,
@@ -342,6 +395,43 @@ class LineupGenerator {
                 .take(positions.size.coerceAtMost(players.size))
                 .toMutableList()
 
+            positions.forEach { position ->
+                val lockedIds = lockedPlayerIdsByPosition[position].orEmpty()
+                if (lockedIds.isEmpty()) return@forEach
+                val lockedPlayer = players
+                    .filter { it.id in lockedIds }
+                    .minWithOrNull(
+                        compareBy<LineupPlayer>(
+                            { slotCounts[it.id] ?: 0 },
+                            { positionCounts.getOrDefault(it.id to position, 0) },
+                            { variationRank(variationSeed, "locked-position-${halfNumber}-${roundIndex}-${position.name}-${it.id}") },
+                            { it.name },
+                        ),
+                    ) ?: return@forEach
+                if (selectedPlayers.any { it.id == lockedPlayer.id }) return@forEach
+
+                val replaceable = selectedPlayers
+                    .filterNot { selected ->
+                        lockedPlayerIdsByPosition.values.any { selected.id in it }
+                    }
+                    .maxWithOrNull(
+                        compareBy<LineupPlayer>(
+                            { slotCounts[it.id] ?: 0 },
+                            { it.name },
+                        ),
+                    ) ?: selectedPlayers.maxWithOrNull(
+                    compareBy<LineupPlayer>(
+                        { slotCounts[it.id] ?: 0 },
+                        { it.name },
+                    ),
+                )
+
+                if (replaceable != null) {
+                    selectedPlayers.remove(replaceable)
+                    selectedPlayers += lockedPlayer
+                }
+            }
+
             selectedPlayers.forEach { player ->
                 slotCounts[player.id] = slotCounts.getOrDefault(player.id, 0) + 1
             }
@@ -351,8 +441,26 @@ class LineupGenerator {
 
             // If a player is staying on the field between rounds, keep them in the same exact
             // position and only use the open positions for the actual subs coming in.
+            positions.forEach { position ->
+                val lockedIds = lockedPlayerIdsByPosition[position].orEmpty()
+                if (lockedIds.isEmpty()) return@forEach
+                val lockedPlayer = remainingPlayers
+                    .filter { it.id in lockedIds }
+                    .minWithOrNull(
+                        compareBy<LineupPlayer>(
+                            { positionCounts.getOrDefault(it.id to position, 0) },
+                            { slotCounts[it.id] ?: 0 },
+                            { variationRank(variationSeed, "locked-assignment-${halfNumber}-${roundIndex}-${position.name}-${it.id}") },
+                            { it.name },
+                        ),
+                    ) ?: return@forEach
+                currentAssignmentsByPosition[position] = lockedPlayer.id
+                remainingPlayers.remove(lockedPlayer)
+            }
+
             previousAssignmentsByPosition.forEach { (position, playerId) ->
                 if (position !in positions) return@forEach
+                if (position in currentAssignmentsByPosition) return@forEach
                 val stayingPlayer = remainingPlayers.firstOrNull { it.id == playerId } ?: return@forEach
                 currentAssignmentsByPosition[position] = stayingPlayer.id
                 remainingPlayers.remove(stayingPlayer)

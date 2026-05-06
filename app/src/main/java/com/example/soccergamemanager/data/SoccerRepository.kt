@@ -190,8 +190,12 @@ class SoccerRepository(
 
         val formation = FormationConfig.forType(formationType)
         val activeGroups = formation.groupOrder.toSet()
+        val activePositions = formation.positions.toSet()
         val prunedLocks = game.manualGroupLocks()
-            .filter { it.positionGroup in activeGroups }
+            .filter {
+                it.positionGroup in activeGroups &&
+                    (it.lockedPosition == null || it.lockedPosition in activePositions)
+            }
         val updatedTemplate = game.template().copy(
             formationType = formationType,
             positions = formation.positions,
@@ -432,11 +436,45 @@ class SoccerRepository(
         if (game.status == GameStatus.LIVE || game.status == GameStatus.FINAL) return
 
         val updatedLocks = game.manualGroupLocks()
-            .filterNot { it.halfNumber == halfNumber && it.positionGroup == positionGroup } +
+            .filterNot {
+                it.halfNumber == halfNumber &&
+                    it.positionGroup == positionGroup &&
+                    it.lockedPosition == null
+            } +
             com.example.soccergamemanager.domain.ManualGroupLock(
                 halfNumber = halfNumber,
                 positionGroup = positionGroup,
                 playerIds = playerIds.distinct(),
+            )
+
+        gameDao.updateGame(
+            game.copy(
+                manualGroupLocksJson = updatedLocks
+                    .filter { it.playerIds.isNotEmpty() }
+                    .toJson(),
+            ),
+        )
+    }
+
+    suspend fun updateManualPositionLock(
+        gameId: String,
+        halfNumber: Int,
+        position: FieldPosition,
+        playerIds: List<String>,
+    ) {
+        val game = gameDao.getGame(gameId) ?: return
+        if (game.status == GameStatus.LIVE || game.status == GameStatus.FINAL) return
+        val template = game.template()
+        if (position !in template.activePositions) return
+
+        val positionGroup = template.formation.groupForPosition(position)
+        val updatedLocks = game.manualGroupLocks()
+            .filterNot { it.halfNumber == halfNumber && it.lockedPosition == position } +
+            com.example.soccergamemanager.domain.ManualGroupLock(
+                halfNumber = halfNumber,
+                positionGroup = positionGroup,
+                playerIds = playerIds.distinct(),
+                lockedPosition = position,
             )
 
         gameDao.updateGame(

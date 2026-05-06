@@ -450,6 +450,14 @@ class MainViewModel(
         }
     }
 
+    fun updateManualPositionLock(halfNumber: Int, position: FieldPosition, playerIds: List<String>) {
+        val gameId = selectedGameId.value ?: return
+        launchTask {
+            repository.updateManualPositionLock(gameId, halfNumber, position, playerIds)
+            message.value = "Position lock updated."
+        }
+    }
+
     fun cycleAssignmentPlayer(assignmentId: String) {
         launchTask {
             repository.cycleAssignmentPlayer(assignmentId)

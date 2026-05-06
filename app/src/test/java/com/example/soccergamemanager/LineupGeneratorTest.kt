@@ -190,6 +190,43 @@ class LineupGeneratorTest {
     }
 
     @Test
+    fun attack_back_three_center_defense_lock_rotates_locked_players_through_center_defense() {
+        val players = (1..12).map { index ->
+            LineupPlayer(
+                id = "p$index",
+                name = "Player $index",
+                preferredKeeper = index <= 2,
+            )
+        }
+        val template = GameTemplateConfig.defaultU9().copy(
+            formationType = FormationType.ATTACK_BACK_THREE,
+            positions = GameTemplateConfig.ATTACK_BACK_THREE_POSITIONS,
+        )
+
+        val result = generator.generate(
+            template = template,
+            players = players,
+            historyByPlayer = emptyMap(),
+            manualGroupLocks = listOf(
+                ManualGroupLock(
+                    halfNumber = 1,
+                    positionGroup = PositionGroup.DEFENSE,
+                    playerIds = listOf("p3", "p4"),
+                    lockedPosition = FieldPosition.CENTER_DEFENSE,
+                ),
+            ),
+        )
+
+        val centerDefensePlayers = result.assignments
+            .filter { it.halfNumber == 1 && it.position == FieldPosition.CENTER_DEFENSE }
+            .map { it.playerId }
+            .toSet()
+
+        assertTrue(centerDefensePlayers.all { it in setOf("p3", "p4") })
+        assertEquals(setOf("p3", "p4"), centerDefensePlayers)
+    }
+
+    @Test
     fun ignores_duplicate_manual_lock_across_groups_in_same_half() {
         val players = (1..11).map { index ->
             LineupPlayer(

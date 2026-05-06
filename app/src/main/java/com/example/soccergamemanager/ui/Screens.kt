@@ -304,6 +304,7 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                         onUpdateGameFormation = viewModel::updateGameFormation,
                         onToggleAvailability = viewModel::toggleAvailability,
                         onUpdateManualGroupLock = viewModel::updateManualGroupLock,
+                        onUpdateManualPositionLock = viewModel::updateManualPositionLock,
                         onSetAssignmentPlayer = viewModel::setAssignmentPlayer,
                         onSetAssignmentPosition = viewModel::setAssignmentPosition,
                         onStartOrPause = viewModel::startOrPauseClock,
@@ -965,6 +966,7 @@ private fun GameHubScreen(
     onUpdateGameFormation: (FormationType, Boolean) -> Unit,
     onToggleAvailability: (String, Int, Boolean) -> Unit,
     onUpdateManualGroupLock: (Int, PositionGroup, List<String>) -> Unit,
+    onUpdateManualPositionLock: (Int, FieldPosition, List<String>) -> Unit,
     onSetAssignmentPlayer: (String, String) -> Unit,
     onSetAssignmentPosition: (String, FieldPosition) -> Unit,
     onStartOrPause: () -> Unit,
@@ -1025,6 +1027,7 @@ private fun GameHubScreen(
                     onGenerateAssignments = onGenerateAssignments,
                     onUpdateGameFormation = onUpdateGameFormation,
                     onUpdateManualGroupLock = onUpdateManualGroupLock,
+                    onUpdateManualPositionLock = onUpdateManualPositionLock,
                     onSetAssignmentPlayer = onSetAssignmentPlayer,
                     onSetAssignmentPosition = onSetAssignmentPosition,
                     showHeader = false,
@@ -1308,6 +1311,7 @@ private fun PlannerScreen(
     onGenerateAssignments: () -> Unit,
     onUpdateGameFormation: (FormationType, Boolean) -> Unit,
     onUpdateManualGroupLock: (Int, PositionGroup, List<String>) -> Unit,
+    onUpdateManualPositionLock: (Int, FieldPosition, List<String>) -> Unit,
     onSetAssignmentPlayer: (String, String) -> Unit,
     onSetAssignmentPosition: (String, FieldPosition) -> Unit,
     showHeader: Boolean = true,
@@ -1326,9 +1330,18 @@ private fun PlannerScreen(
         .filter { it.active }
         .sortedBy { it.name }
     val manualLocksByHalfGroup = detail.game.manualGroupLocks()
+        .filter { it.lockedPosition == null }
         .associateBy({ it.halfNumber to it.positionGroup }, { it.playerIds })
+    val manualLocksByHalfPosition = detail.game.manualGroupLocks()
+        .mapNotNull { lock ->
+            lock.lockedPosition?.let { position -> (lock.halfNumber to position) to lock.playerIds }
+        }
+        .toMap()
     var editingLockKey by rememberSaveable(detail.game.gameId) {
         mutableStateOf<Pair<Int, PositionGroup>?>(null)
+    }
+    var editingPositionLockKey by rememberSaveable(detail.game.gameId) {
+        mutableStateOf<Pair<Int, FieldPosition>?>(null)
     }
     var editingAssignmentId by rememberSaveable(detail.game.gameId) {
         mutableStateOf<String?>(null)
@@ -1367,13 +1380,18 @@ private fun PlannerScreen(
 
     editingLockKey?.let { (halfNumber, group) ->
         val existingSelection = manualLocksByHalfGroup[halfNumber to group].orEmpty()
-        val lockedElsewhereIds = manualLocksByHalfGroup
-            .filterKeys { (lockedHalfNumber, lockedGroup) ->
-                lockedHalfNumber == halfNumber && lockedGroup != group
-            }
-            .values
-            .flatten()
-            .toSet()
+        val lockedElsewhereIds = (
+            manualLocksByHalfGroup
+                .filterKeys { (lockedHalfNumber, lockedGroup) ->
+                    lockedHalfNumber == halfNumber && lockedGroup != group
+                }
+                .values
+                .flatten() +
+                manualLocksByHalfPosition
+                    .filterKeys { (lockedHalfNumber, _) -> lockedHalfNumber == halfNumber }
+                    .values
+                    .flatten()
+            ).toSet()
         var selectedIds by remember(detail.game.gameId, halfNumber, group, existingSelection, manualLocksByHalfGroup) {
             mutableStateOf(existingSelection)
         }
@@ -1442,6 +1460,86 @@ private fun PlannerScreen(
             },
             dismissButton = {
                 TextButton(onClick = { editingLockKey = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
+    editingPositionLockKey?.let { (halfNumber, position) ->
+        val existingSelection = manualLocksByHalfPosition[halfNumber to position].orEmpty()
+        val lockedElsewhereIds = (
+            manualLocksByHalfGroup
+                .filterKeys { (lockedHalfNumber, _) -> lockedHalfNumber == halfNumber }
+                .values
+                .flatten() +
+                manualLocksByHalfPosition
+                    .filterKeys { (lockedHalfNumber, lockedPosition) ->
+                        lockedHalfNumber == halfNumber && lockedPosition != position
+                    }
+                    .values
+                    .flatten()
+            ).toSet()
+        var selectedIds by remember(detail.game.gameId, halfNumber, position, existingSelection, manualLocksByHalfPosition) {
+            mutableStateOf(existingSelection)
+        }
+
+        AlertDialog(
+            onDismissRequest = { editingPositionLockKey = null },
+            title = { Text("Half $halfNumber ${position.label} lock") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Choose the players who should rotate through ${position.label} this half.")
+                    Text(
+                        "For Attack + Back Three, two center defenders is usually a good target.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    availablePlayers
+                        .filter { availabilityMap[it.playerId]?.isAvailableForHalf(halfNumber) != false }
+                        .forEach { player ->
+                            val lockedElsewhere = player.playerId in lockedElsewhereIds && player.playerId !in selectedIds
+                            FilterChip(
+                                selected = player.playerId in selectedIds,
+                                onClick = {
+                                    if (lockedElsewhere) return@FilterChip
+                                    selectedIds = if (player.playerId in selectedIds) {
+                                        selectedIds - player.playerId
+                                    } else {
+                                        selectedIds + player.playerId
+                                    }
+                                },
+                                label = {
+                                    Text(
+                                        if (lockedElsewhere) {
+                                            "${player.name} (locked elsewhere)"
+                                        } else {
+                                            player.name
+                                        },
+                                    )
+                                },
+                                enabled = !lockedElsewhere,
+                            )
+                        }
+                    if (selectedIds.isNotEmpty()) {
+                        TextButton(onClick = { selectedIds = emptyList() }) {
+                            Text("Clear lock")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onUpdateManualPositionLock(halfNumber, position, selectedIds)
+                        editingPositionLockKey = null
+                    },
+                ) {
+                    Text("Save lock")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingPositionLockKey = null }) {
                     Text("Cancel")
                 }
             },
@@ -1660,11 +1758,22 @@ private fun PlannerScreen(
                                 modifier = Modifier.weight(1f),
                                 halfNumber = halfNumber,
                                 groupOrder = formation.groupOrder,
+                                positionLockOrder = if (template.formationType == FormationType.ATTACK_BACK_THREE) {
+                                    listOf(FieldPosition.CENTER_DEFENSE)
+                                } else {
+                                    emptyList()
+                                },
                                 playerLookup = playerLookup,
                                 locksByGroup = manualLocksByHalfGroup,
+                                locksByPosition = manualLocksByHalfPosition,
                                 onEditGroup = { group ->
                                     if (!readOnly) {
                                         editingLockKey = halfNumber to group
+                                    }
+                                },
+                                onEditPosition = { position ->
+                                    if (!readOnly) {
+                                        editingPositionLockKey = halfNumber to position
                                     }
                                 },
                                 editable = !readOnly,
@@ -1677,11 +1786,22 @@ private fun PlannerScreen(
                             ManualLocksCard(
                                 halfNumber = halfNumber,
                                 groupOrder = formation.groupOrder,
+                                positionLockOrder = if (template.formationType == FormationType.ATTACK_BACK_THREE) {
+                                    listOf(FieldPosition.CENTER_DEFENSE)
+                                } else {
+                                    emptyList()
+                                },
                                 playerLookup = playerLookup,
                                 locksByGroup = manualLocksByHalfGroup,
+                                locksByPosition = manualLocksByHalfPosition,
                                 onEditGroup = { group ->
                                     if (!readOnly) {
                                         editingLockKey = halfNumber to group
+                                    }
+                                },
+                                onEditPosition = { position ->
+                                    if (!readOnly) {
+                                        editingPositionLockKey = halfNumber to position
                                     }
                                 },
                                 editable = !readOnly,
@@ -5534,15 +5654,67 @@ private fun ManualLocksCard(
     modifier: Modifier = Modifier,
     halfNumber: Int,
     groupOrder: List<PositionGroup>,
+    positionLockOrder: List<FieldPosition>,
     playerLookup: Map<String, String>,
     locksByGroup: Map<Pair<Int, PositionGroup>, List<String>>,
+    locksByPosition: Map<Pair<Int, FieldPosition>, List<String>>,
     onEditGroup: (PositionGroup) -> Unit,
+    onEditPosition: (FieldPosition) -> Unit,
     editable: Boolean,
 ) {
     Card(modifier = modifier) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Half $halfNumber manual locks", style = MaterialTheme.typography.titleMedium)
             Text("Lock key players into a position group before generating the lineup.")
+            positionLockOrder.forEach { position ->
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                    shape = MaterialTheme.shapes.medium,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("${position.label} lock", style = MaterialTheme.typography.titleLarge)
+                                Text(
+                                    "Rotate selected players through this exact position.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(onClick = { onEditPosition(position) }, enabled = editable) {
+                                Text("Edit")
+                            }
+                        }
+                        val names = locksByPosition[halfNumber to position]
+                            .orEmpty()
+                            .mapNotNull { playerLookup[it] }
+                        if (names.isEmpty()) {
+                            Text("No players locked.")
+                        } else {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                names.forEach { name ->
+                                    ElevatedAssistChip(
+                                        onClick = { if (editable) onEditPosition(position) },
+                                        label = { Text(name) },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             groupOrder.forEach { group ->
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant,
