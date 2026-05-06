@@ -461,6 +461,8 @@ class MainViewModel(
         launchTask {
             repository.setAssignmentPlayer(assignmentId, replacementPlayerId)
             refreshReport()
+            refreshMetrics()
+            message.value = "Player assignment corrected."
         }
     }
 

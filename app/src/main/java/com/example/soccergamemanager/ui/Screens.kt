@@ -1456,14 +1456,39 @@ private fun PlannerScreen(
             }
             AlertDialog(
                 onDismissRequest = { editingAssignmentId = null },
-                title = { Text(if (readOnly) "Correct actual position" else "Set ${assignment.position.label}") },
+                title = { Text(if (readOnly) "Correct actual lineup" else "Set ${assignment.position.label}") },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         if (readOnly) {
                             Text(
-                                "Correct the recorded position for ${playerLookup[assignment.playerId].orEmpty()} in half ${assignment.halfNumber}, round ${assignment.roundIndex}.",
+                                "Correct who actually played and where for half ${assignment.halfNumber}, round ${assignment.roundIndex}.",
                             )
-                            Text("If another player is already recorded in that position, the app will swap the two positions.")
+                            Text("If the selected player or position is already on the field in this round, the app swaps the records.")
+                            Text("Correct player", style = MaterialTheme.typography.labelLarge)
+                            availablePlayers.forEach { player ->
+                                val onFieldThisRound = sameRoundAssignments.firstOrNull { it.playerId == player.playerId }
+                                val markedUnavailable = availabilityMap[player.playerId]?.isAvailableForHalf(assignment.halfNumber) == false
+                                OutlinedButton(
+                                    onClick = {
+                                        onSetAssignmentPlayer(assignment.assignmentId, player.playerId)
+                                        editingAssignmentId = null
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    val suffix = when {
+                                        player.playerId == assignment.playerId -> " (current)"
+                                        onFieldThisRound != null -> " (swap from ${onFieldThisRound.position.label})"
+                                        markedUnavailable -> " (marked unavailable)"
+                                        else -> ""
+                                    }
+                                    Text("${player.name}$suffix")
+                                }
+                            }
+                            HorizontalDivider()
+                            Text("Correct position", style = MaterialTheme.typography.labelLarge)
                             template.activePositions.forEach { position ->
                                 val occupied = sameRoundAssignments.firstOrNull {
                                     it.assignmentId != assignment.assignmentId && it.position == position

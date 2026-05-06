@@ -484,12 +484,9 @@ class SoccerRepository(
     suspend fun setAssignmentPlayer(assignmentId: String, replacementPlayerId: String) {
         val assignment = assignmentDao.getAssignment(assignmentId) ?: return
         val game = gameDao.getGame(assignment.gameId) ?: return
-        if (game.status == GameStatus.LIVE || game.status == GameStatus.FINAL) return
 
         val players = playerDao.getPlayersBySeason(game.seasonId)
         val replacement = players.firstOrNull { it.playerId == replacementPlayerId && it.active } ?: return
-        val availability = availabilityDao.getByGame(game.gameId).associateBy { it.playerId }
-        if (availability[replacement.playerId]?.isAvailableForHalf(assignment.halfNumber) == false) return
 
         val roundAssignments = assignmentDao.getByRound(game.gameId, assignment.halfNumber, assignment.roundIndex)
         val swapAssignment = roundAssignments.firstOrNull {
