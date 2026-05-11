@@ -92,6 +92,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -106,13 +107,16 @@ import com.example.soccergamemanager.data.GoalEventEntity
 import com.example.soccergamemanager.data.PlayerAvailabilityEntity
 import com.example.soccergamemanager.data.PlayerEntity
 import com.example.soccergamemanager.data.SeasonEntity
+import com.example.soccergamemanager.data.extraLineupSlots
 import com.example.soccergamemanager.data.isAvailableForHalf
 import com.example.soccergamemanager.data.manualGroupLocks
 import com.example.soccergamemanager.data.template
+import com.example.soccergamemanager.domain.ExtraPlayerType
 import com.example.soccergamemanager.domain.FieldPosition
 import com.example.soccergamemanager.domain.FormationType
 import com.example.soccergamemanager.domain.GameStatus
 import com.example.soccergamemanager.domain.GoalSide
+import com.example.soccergamemanager.domain.LineupEditScope
 import com.example.soccergamemanager.domain.PositionGroup
 import com.example.soccergamemanager.ui.theme.BadgeBlack
 import com.example.soccergamemanager.ui.theme.IceWhite
@@ -307,6 +311,9 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                         onUpdateManualPositionLock = viewModel::updateManualPositionLock,
                         onSetAssignmentPlayer = viewModel::setAssignmentPlayer,
                         onSetAssignmentPosition = viewModel::setAssignmentPosition,
+                        onAssignLineupBoardCell = viewModel::assignLineupBoardCell,
+                        onAddExtraLineupSlot = viewModel::addExtraLineupSlot,
+                        onRemoveExtraLineupSlot = viewModel::removeExtraLineupSlot,
                         onStartOrPause = viewModel::startOrPauseClock,
                         onAdvanceRound = viewModel::advanceRound,
                         onAdvanceHalf = viewModel::advanceHalf,
@@ -969,6 +976,9 @@ private fun GameHubScreen(
     onUpdateManualPositionLock: (Int, FieldPosition, List<String>) -> Unit,
     onSetAssignmentPlayer: (String, String) -> Unit,
     onSetAssignmentPosition: (String, FieldPosition) -> Unit,
+    onAssignLineupBoardCell: (Int, Int, FieldPosition, String, LineupEditScope) -> Unit,
+    onAddExtraLineupSlot: (ExtraPlayerType, Int, Int, LineupEditScope) -> Unit,
+    onRemoveExtraLineupSlot: (String) -> Unit,
     onStartOrPause: () -> Unit,
     onAdvanceRound: () -> Unit,
     onAdvanceHalf: (Set<String>) -> Unit,
@@ -1030,6 +1040,9 @@ private fun GameHubScreen(
                     onUpdateManualPositionLock = onUpdateManualPositionLock,
                     onSetAssignmentPlayer = onSetAssignmentPlayer,
                     onSetAssignmentPosition = onSetAssignmentPosition,
+                    onAssignLineupBoardCell = onAssignLineupBoardCell,
+                    onAddExtraLineupSlot = onAddExtraLineupSlot,
+                    onRemoveExtraLineupSlot = onRemoveExtraLineupSlot,
                     showHeader = false,
                     onGoToLive = { selectedTab = GameHubTab.LIVE },
                 )
@@ -1045,6 +1058,10 @@ private fun GameHubScreen(
                     onApplyLiveSub = onApplyLiveSub,
                     onApplyInjurySub = onApplyInjurySub,
                     onClearPlayerInjury = onClearPlayerInjury,
+                    onAssignLineupBoardCell = onAssignLineupBoardCell,
+                    onAddExtraLineupSlot = onAddExtraLineupSlot,
+                    onRemoveExtraLineupSlot = onRemoveExtraLineupSlot,
+                    onToggleAvailability = onToggleAvailability,
                     onFinalize = onFinalize,
                     onSaveLiveNotes = onSaveLiveNotes,
                     showHeader = false,
@@ -1314,6 +1331,9 @@ private fun PlannerScreen(
     onUpdateManualPositionLock: (Int, FieldPosition, List<String>) -> Unit,
     onSetAssignmentPlayer: (String, String) -> Unit,
     onSetAssignmentPosition: (String, FieldPosition) -> Unit,
+    onAssignLineupBoardCell: (Int, Int, FieldPosition, String, LineupEditScope) -> Unit,
+    onAddExtraLineupSlot: (ExtraPlayerType, Int, Int, LineupEditScope) -> Unit,
+    onRemoveExtraLineupSlot: (String) -> Unit,
     showHeader: Boolean = true,
     onGoToLive: (() -> Unit)? = null,
 ) {
@@ -1704,49 +1724,12 @@ private fun PlannerScreen(
             )
         }
         item {
-            Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Availability", style = MaterialTheme.typography.titleLarge)
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        detail.players.filter { it.active }.forEach { player ->
-                            val availability = availabilityMap[player.playerId] ?: PlayerAvailabilityEntity(
-                                gameId = detail.game.gameId,
-                                playerId = player.playerId,
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(player.name, modifier = Modifier.weight(1f))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    (1..detail.game.template().halfCount).forEach { halfNumber ->
-                                        val available = availability.isAvailableForHalf(halfNumber)
-                                        FilterChip(
-                                            selected = available,
-                                            onClick = {
-                                                if (!readOnly) {
-                                                    onToggleAvailability(player.playerId, halfNumber, !available)
-                                                }
-                                            },
-                                            label = { Text("H$halfNumber") },
-                                            enabled = !readOnly,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (detail.game.plannerNotes.isNotBlank()) {
-                        Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.primaryContainer) {
-                            Text(detail.game.plannerNotes, modifier = Modifier.padding(12.dp))
-                        }
-                    }
-                    if (readOnly) {
-                        Text("Player assignments are locked once a game is live or finalized, but you can tap a round row to correct the actual position played.")
-                    }
-                }
-            }
+            AvailabilityPlannerCard(
+                detail = detail,
+                availabilityMap = availabilityMap,
+                readOnly = readOnly,
+                onToggleAvailability = onToggleAvailability,
+            )
         }
         item {
             BoxWithConstraints {
@@ -1814,39 +1797,101 @@ private fun PlannerScreen(
         if (detail.assignments.isEmpty()) {
             item { EmptyState("Generate the lineup to see half groups and round-by-round assignments.") }
         } else {
-            item {
-                PositionGroupComparisonSection(detail = detail)
+            (1..detail.game.template().halfCount).forEach { halfNumber ->
+                item {
+                    LineupBoardCard(
+                        detail = detail,
+                        halfNumber = halfNumber,
+                        visibleRounds = (1..template.roundsPerHalf).toList(),
+                        highlightedRound = null,
+                        readOnly = false,
+                        compact = false,
+                        allowStructureEdit = detail.game.status != GameStatus.FINAL,
+                        onAssignCell = onAssignLineupBoardCell,
+                        onAddExtraSlot = onAddExtraLineupSlot,
+                        onRemoveExtraSlot = onRemoveExtraLineupSlot,
+                        onToggleAvailability = onToggleAvailability,
+                    )
+                }
             }
-            item {
-                BoxWithConstraints {
-                    val halfNumbers = (1..detail.game.template().halfCount).toList()
-                    if (maxWidth > 1080.dp && halfNumbers.size >= 2) {
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AvailabilityPlannerCard(
+    detail: GameDetail,
+    availabilityMap: Map<String, PlayerAvailabilityEntity>,
+    readOnly: Boolean,
+    onToggleAvailability: (String, Int, Boolean) -> Unit,
+) {
+    Card {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text("Availability", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        "Compact half-by-half controls. Players marked out move to the board’s unavailable rail.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                detail.players.filter { it.active }.sortedBy { it.name }.forEach { player ->
+                    val availability = availabilityMap[player.playerId] ?: PlayerAvailabilityEntity(
+                        gameId = detail.game.gameId,
+                        playerId = player.playerId,
+                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        shape = MaterialTheme.shapes.medium,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            verticalAlignment = Alignment.Top,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            halfNumbers.forEach { halfNumber ->
-                                PlannerHalfRoundsSection(
-                                    modifier = Modifier.weight(1f),
-                                    detail = detail,
-                                    halfNumber = halfNumber,
-                                    onOpenAssignment = { editingAssignmentId = it.assignmentId },
-                                )
-                            }
-                        }
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            halfNumbers.forEach { halfNumber ->
-                                PlannerHalfRoundsSection(
-                                    detail = detail,
-                                    halfNumber = halfNumber,
-                                    onOpenAssignment = { editingAssignmentId = it.assignmentId },
+                            Text(
+                                player.name,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.width(88.dp),
+                            )
+                            (1..detail.game.template().halfCount).forEach { halfNumber ->
+                                val available = availability.isAvailableForHalf(halfNumber)
+                                FilterChip(
+                                    selected = available,
+                                    onClick = {
+                                        if (!readOnly) {
+                                            onToggleAvailability(player.playerId, halfNumber, !available)
+                                        }
+                                    },
+                                    label = { Text("H$halfNumber", fontSize = 11.sp) },
+                                    enabled = !readOnly,
                                 )
                             }
                         }
                     }
                 }
+            }
+            if (detail.game.plannerNotes.isNotBlank()) {
+                Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.primaryContainer) {
+                    Text(detail.game.plannerNotes, modifier = Modifier.padding(12.dp))
+                }
+            }
+            if (readOnly) {
+                Text(
+                    "Lineups are historical now, but you can still tap board cells to correct who actually played.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }
@@ -1865,6 +1910,10 @@ private fun LiveScreen(
     onApplyLiveSub: (String, String) -> Unit,
     onApplyInjurySub: (String, String) -> Unit,
     onClearPlayerInjury: (String, Boolean) -> Unit,
+    onAssignLineupBoardCell: (Int, Int, FieldPosition, String, LineupEditScope) -> Unit,
+    onAddExtraLineupSlot: (ExtraPlayerType, Int, Int, LineupEditScope) -> Unit,
+    onRemoveExtraLineupSlot: (String) -> Unit,
+    onToggleAvailability: (String, Int, Boolean) -> Unit,
     onFinalize: () -> Unit,
     onSaveLiveNotes: (String) -> Unit,
     showHeader: Boolean = true,
@@ -1938,6 +1987,9 @@ private fun LiveScreen(
     var showSecondHalfDialog by rememberSaveable(detail.game.gameId, detail.game.currentHalf) {
         mutableStateOf(false)
     }
+    var showAdvanceHalfConfirm by rememberSaveable(detail.game.gameId, detail.game.currentHalf) {
+        mutableStateOf(false)
+    }
     var returningSecondHalfIds by rememberSaveable(detail.game.gameId, detail.game.currentHalf) {
         mutableStateOf(listOf<String>())
     }
@@ -1952,9 +2004,6 @@ private fun LiveScreen(
     }
     var compareMode by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
         mutableStateOf(false)
-    }
-    var showPositionGroups by rememberSaveable(detail.game.gameId, detail.game.currentHalf) {
-        mutableStateOf(true)
     }
     var alertPlayedForRound by rememberSaveable(detail.game.gameId, detail.game.currentHalf, detail.game.currentRound) {
         mutableStateOf(false)
@@ -2228,6 +2277,36 @@ private fun LiveScreen(
         )
     }
 
+    if (showAdvanceHalfConfirm) {
+        AlertDialog(
+            onDismissRequest = { showAdvanceHalfConfirm = false },
+            title = { Text("Advance to next half?") },
+            text = {
+                Text("This will move the live game from half ${detail.game.currentHalf} to half ${detail.game.currentHalf + 1}.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showAdvanceHalfConfirm = false
+                        if (injuredPlayers.isNotEmpty() && detail.game.currentHalf < template.halfCount) {
+                            showSecondHalfDialog = true
+                        } else {
+                            onAdvanceHalf(emptySet())
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) {
+                    Text("Advance half")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAdvanceHalfConfirm = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
     selectedAssignmentId?.let { assignmentId ->
         val assignment = currentAssignments.firstOrNull { it.assignmentId == assignmentId }
         if (assignment != null) {
@@ -2490,100 +2569,77 @@ private fun LiveScreen(
             configuration.orientation == Configuration.ORIENTATION_LANDSCAPE && configuration.screenWidthDp >= 840
 
         if (isTabletLandscape) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Column(
-                    modifier = Modifier
-                        .weight(0.95f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    if (detail.game.status == GameStatus.PLANNED && detail.assignments.isNotEmpty()) {
-                        LivePregameCard(detail = detail, currentAssignments = currentAssignments, nextAssignments = nextAssignments)
-                    }
-                    LiveControlPanel(
-                        detail = detail,
-                        uiState = uiState,
-                        teamName = teamName,
-                        gameRemainingSeconds = gameRemainingSeconds,
-                        substitutionRemainingSeconds = substitutionRemainingSeconds,
-                        advanceHalfReady = advanceHalfReady,
-                        onStartOrPause = onStartOrPause,
-                        onAdvanceRound = onAdvanceRound,
-                        onAdvanceHalf = {
-                            if (injuredPlayers.isNotEmpty() && detail.game.currentHalf < template.halfCount) {
-                                showSecondHalfDialog = true
-                            } else {
-                                onAdvanceHalf(emptySet())
-                            }
-                        },
-                        onFinalize = onFinalize,
-                        onTeamGoal = { showScorerDialog = true },
-                        onOpponentGoal = {
-                            pendingGoalSide = GoalSide.OPPONENT.name
-                            pendingScorerId = null
-                            pendingAssisterId = null
-                            pendingGoalNote = ""
-                            showGoalNoteDialog = true
-                        },
-                        showHeader = showHeader,
-                    )
-                    PositionGroupsCard(
-                        detail = detail,
-                        halfNumber = detail.game.currentHalf,
-                        showGroups = showPositionGroups,
-                        onToggleGroups = { showPositionGroups = !showPositionGroups },
-                    )
-                    InjuredPlayersCard(
-                        injuredPlayers = injuredPlayers,
-                        playerLookup = playerLookup,
-                        onClearPlayerInjury = onClearPlayerInjury,
-                    )
-                    GoalLogCard(
-                        goals = goalLog,
-                        playerLookup = playerLookup,
-                        teamName = teamName,
-                        opponentName = detail.game.opponent,
-                        onEditGoal = { editingGoalId = it.goalEventId },
-                        onDeleteGoal = { deletingGoalId = it.goalEventId },
-                    )
-                    GameNotesEditorCard(
-                        title = "Live notes",
-                        subtitle = "Capture quick observations during the game.",
-                        value = liveNotesDraft,
-                        onValueChange = { liveNotesDraft = it },
-                        onSave = { onSaveLiveNotes(liveNotesDraft) },
-                        saveLabel = "Save live notes",
-                    )
+                if (detail.game.status == GameStatus.PLANNED && detail.assignments.isNotEmpty()) {
+                    LivePregameCard(detail = detail, currentAssignments = currentAssignments, nextAssignments = nextAssignments)
                 }
-                Column(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    LineupCard(
-                        title = "Current lineup",
-                        detail = detail,
-                        assignments = currentAssignments,
-                        nextAssignmentByPosition = nextAssignmentByPosition,
-                        compareMode = compareMode,
-                        onToggleCompareMode = { compareMode = !compareMode },
-                        onOpenActions = { selectedAssignmentId = it.assignmentId },
-                    )
-                    LineupCard(
-                        title = "Next round lineup",
-                        detail = detail,
-                        assignments = nextAssignments,
-                        nextAssignmentByPosition = nextAssignments.associateBy { it.position },
-                        compareMode = false,
-                        onToggleCompareMode = { compareMode = !compareMode },
-                        onOpenActions = null,
-                    )
+                LiveControlPanel(
+                    detail = detail,
+                    uiState = uiState,
+                    teamName = teamName,
+                    gameRemainingSeconds = gameRemainingSeconds,
+                    substitutionRemainingSeconds = substitutionRemainingSeconds,
+                    advanceHalfReady = advanceHalfReady,
+                    onStartOrPause = onStartOrPause,
+                    onAdvanceRound = onAdvanceRound,
+                    onAdvanceHalf = { showAdvanceHalfConfirm = true },
+                    onFinalize = onFinalize,
+                    onTeamGoal = { showScorerDialog = true },
+                    onOpponentGoal = {
+                        pendingGoalSide = GoalSide.OPPONENT.name
+                        pendingScorerId = null
+                        pendingAssisterId = null
+                        pendingGoalNote = ""
+                        showGoalNoteDialog = true
+                    },
+                    showHeader = showHeader,
+                )
+                LineupBoardCard(
+                    detail = detail,
+                    halfNumber = detail.game.currentHalf,
+                    visibleRounds = (1..template.roundsPerHalf).toList(),
+                    highlightedRound = detail.game.currentRound,
+                    readOnly = false,
+                    compact = false,
+                    allowStructureEdit = detail.game.status != GameStatus.FINAL,
+                    onAssignCell = onAssignLineupBoardCell,
+                    onAddExtraSlot = onAddExtraLineupSlot,
+                    onRemoveExtraSlot = onRemoveExtraLineupSlot,
+                    onToggleAvailability = onToggleAvailability,
+                    onOpenAssignmentActions = { selectedAssignmentId = it.assignmentId },
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Top) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        InjuredPlayersCard(
+                            injuredPlayers = injuredPlayers,
+                            playerLookup = playerLookup,
+                            onClearPlayerInjury = onClearPlayerInjury,
+                        )
+                        GoalLogCard(
+                            goals = goalLog,
+                            playerLookup = playerLookup,
+                            teamName = teamName,
+                            opponentName = detail.game.opponent,
+                            onEditGoal = { editingGoalId = it.goalEventId },
+                            onDeleteGoal = { deletingGoalId = it.goalEventId },
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        GameNotesEditorCard(
+                            title = "Live notes",
+                            subtitle = "Capture quick observations during the game.",
+                            value = liveNotesDraft,
+                            onValueChange = { liveNotesDraft = it },
+                            onSave = { onSaveLiveNotes(liveNotesDraft) },
+                            saveLabel = "Save live notes",
+                        )
+                    }
                 }
             }
         } else {
@@ -2606,13 +2662,7 @@ private fun LiveScreen(
                     advanceHalfReady = advanceHalfReady,
                     onStartOrPause = onStartOrPause,
                     onAdvanceRound = onAdvanceRound,
-                    onAdvanceHalf = {
-                        if (injuredPlayers.isNotEmpty() && detail.game.currentHalf < template.halfCount) {
-                            showSecondHalfDialog = true
-                        } else {
-                            onAdvanceHalf(emptySet())
-                        }
-                    },
+                    onAdvanceHalf = { showAdvanceHalfConfirm = true },
                     onFinalize = onFinalize,
                     onTeamGoal = { showScorerDialog = true },
                     onOpponentGoal = {
@@ -2624,32 +2674,20 @@ private fun LiveScreen(
                     },
                     showHeader = showHeader,
                 )
-                PositionGroupsCard(
+                LineupBoardCard(
                     detail = detail,
                     halfNumber = detail.game.currentHalf,
-                    showGroups = showPositionGroups,
-                    onToggleGroups = { showPositionGroups = !showPositionGroups },
+                    visibleRounds = (1..template.roundsPerHalf).toList(),
+                    highlightedRound = detail.game.currentRound,
+                    readOnly = false,
+                    compact = false,
+                    allowStructureEdit = detail.game.status != GameStatus.FINAL,
+                    onAssignCell = onAssignLineupBoardCell,
+                    onAddExtraSlot = onAddExtraLineupSlot,
+                    onRemoveExtraSlot = onRemoveExtraLineupSlot,
+                    onToggleAvailability = onToggleAvailability,
+                    onOpenAssignmentActions = { selectedAssignmentId = it.assignmentId },
                 )
-                LineupCard(
-                    title = "Current lineup",
-                    detail = detail,
-                    assignments = currentAssignments,
-                    nextAssignmentByPosition = nextAssignmentByPosition,
-                    compareMode = compareMode,
-                    onToggleCompareMode = { compareMode = !compareMode },
-                    onOpenActions = { selectedAssignmentId = it.assignmentId },
-                )
-                if (nextAssignments.isNotEmpty()) {
-                    LineupCard(
-                        title = "Next round lineup",
-                        detail = detail,
-                        assignments = nextAssignments,
-                        nextAssignmentByPosition = nextAssignments.associateBy { it.position },
-                        compareMode = false,
-                        onToggleCompareMode = { compareMode = !compareMode },
-                        onOpenActions = null,
-                    )
-                }
                 InjuredPlayersCard(
                     injuredPlayers = injuredPlayers,
                     playerLookup = playerLookup,
@@ -2701,9 +2739,9 @@ private fun LiveControlPanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp),
+                .padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (showHeader) {
                 ScreenHeader(
@@ -2719,8 +2757,8 @@ private fun LiveControlPanel(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -2733,7 +2771,7 @@ private fun LiveControlPanel(
                         )
                         Text(
                             text = "-",
-                            style = MaterialTheme.typography.headlineLarge,
+                            style = MaterialTheme.typography.headlineMedium,
                             fontFamily = FontFamily.Monospace,
                         )
                         ScoreColumn(
@@ -2743,7 +2781,7 @@ private fun LiveControlPanel(
                     }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Button(
                             onClick = onTeamGoal,
@@ -2766,19 +2804,17 @@ private fun LiveControlPanel(
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 ClockCard(
                     modifier = Modifier.weight(1f),
                     label = "Game clock",
                     value = formatClock(gameRemainingSeconds.coerceAtLeast(0)),
-                    sublabel = "Counts down for the half",
                 )
                 ClockCard(
                     modifier = Modifier.weight(1f),
                     label = "Sub clock",
                     value = formatSignedClock(substitutionRemainingSeconds),
-                    sublabel = "Resets on next sub round",
                     valueColor = if (substitutionRemainingSeconds < 0) {
                         MaterialTheme.colorScheme.error
                     } else {
@@ -2786,8 +2822,11 @@ private fun LiveControlPanel(
                     },
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onStartOrPause) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(onClick = onStartOrPause, modifier = Modifier.weight(1f)) {
                     Text(
                         when {
                             uiState.clockRunning -> "Pause clock"
@@ -2799,6 +2838,7 @@ private fun LiveControlPanel(
                 Button(
                     onClick = onAdvanceRound,
                     enabled = detail.game.status != GameStatus.FINAL && detail.game.currentRound < template.roundsPerHalf,
+                    modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = IceWhite,
                         contentColor = BadgeBlack,
@@ -2808,21 +2848,27 @@ private fun LiveControlPanel(
                 ) {
                     Text("Next sub round")
                 }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = onAdvanceHalf,
                     enabled = detail.game.status != GameStatus.FINAL && detail.game.currentHalf < template.halfCount,
+                    modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (advanceHalfReady) {
                             MaterialTheme.colorScheme.error
                         } else {
-                            MaterialTheme.colorScheme.primary
+                            MaterialTheme.colorScheme.errorContainer
+                        },
+                        contentColor = if (advanceHalfReady) {
+                            MaterialTheme.colorScheme.onError
+                        } else {
+                            MaterialTheme.colorScheme.onErrorContainer
                         },
                     ),
                 ) {
                     Text("Advance half")
                 }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (showFinalizeButton) {
                     OutlinedButton(onClick = onFinalize) {
                         Text("Finalize")
@@ -2840,12 +2886,12 @@ private fun ScoreColumn(
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
-        Text(label, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+        Text(label, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
         Text(
             text = score.toString(),
-            style = MaterialTheme.typography.headlineLarge,
+            style = MaterialTheme.typography.headlineMedium,
             fontFamily = FontFamily.Monospace,
         )
     }
@@ -3742,6 +3788,718 @@ private fun GoalLogCard(
             }
         }
     }
+}
+
+private data class BoardCellSelection(
+    val halfNumber: Int,
+    val roundIndex: Int,
+    val position: FieldPosition,
+)
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun LineupBoardCard(
+    detail: GameDetail,
+    halfNumber: Int,
+    visibleRounds: List<Int>,
+    highlightedRound: Int?,
+    readOnly: Boolean,
+    compact: Boolean,
+    onAssignCell: (Int, Int, FieldPosition, String, LineupEditScope) -> Unit,
+    onAddExtraSlot: (ExtraPlayerType, Int, Int, LineupEditScope) -> Unit,
+    onRemoveExtraSlot: (String) -> Unit,
+    onToggleAvailability: (String, Int, Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    allowStructureEdit: Boolean = true,
+    onOpenAssignmentActions: ((AssignmentEntity) -> Unit)? = null,
+) {
+    val template = detail.game.template()
+    val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
+    val activePlayers = detail.players.filter { it.active }.sortedBy { it.name }
+    val availabilityByPlayer = detail.availability.associateBy { it.playerId }
+    val extraSlots = detail.game.extraLineupSlots().filter { it.halfNumber == halfNumber }
+    val positions = (template.activePositions + extraSlots.map { it.position }).distinct()
+    var selectedRoundState by rememberSaveable(
+        detail.game.gameId,
+        halfNumber,
+        highlightedRound ?: -1,
+        visibleRounds.joinToString(","),
+    ) {
+        mutableStateOf(highlightedRound ?: visibleRounds.firstOrNull() ?: 1)
+    }
+    val selectedRound = if (selectedRoundState in visibleRounds) {
+        selectedRoundState
+    } else {
+        visibleRounds.firstOrNull() ?: selectedRoundState
+    }
+    val selectedRoundAssignments = detail.assignments.filter {
+        it.halfNumber == halfNumber && it.roundIndex == selectedRound
+    }
+    val selectedOnFieldPlayerIds = selectedRoundAssignments.map { it.playerId }.toSet()
+    val benchPlayers = activePlayers.filter { player ->
+        player.playerId !in selectedOnFieldPlayerIds &&
+            availabilityByPlayer[player.playerId]?.isAvailableForHalf(halfNumber) != false &&
+            availabilityByPlayer[player.playerId]?.isInjured != true
+    }
+    val unavailablePlayers = activePlayers.filter { player ->
+        availabilityByPlayer[player.playerId]?.isAvailableForHalf(halfNumber) == false ||
+            availabilityByPlayer[player.playerId]?.isInjured == true
+    }
+    var pickerTarget by rememberSaveable(detail.game.gameId, halfNumber) {
+        mutableStateOf<String?>(null)
+    }
+    var showExtraDialog by rememberSaveable(detail.game.gameId, halfNumber) {
+        mutableStateOf(false)
+    }
+
+    pickerTarget?.let { encoded ->
+        val parts = encoded.split("|")
+        val target = BoardCellSelection(
+            halfNumber = parts[0].toInt(),
+            roundIndex = parts[1].toInt(),
+            position = FieldPosition.valueOf(parts[2]),
+        )
+        val rowAssignments = detail.assignments.filter {
+            it.halfNumber == target.halfNumber && it.roundIndex == target.roundIndex
+        }
+        val current = rowAssignments.firstOrNull { it.position == target.position }
+        AlertDialog(
+            onDismissRequest = { pickerTarget = null },
+            title = { Text("Set ${target.position.label}") },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("Half ${target.halfNumber}, rotation ${target.roundIndex}")
+                    Text("This updates the selected rotation only.")
+                    activePlayers.forEach { player ->
+                        val rowAssignment = rowAssignments.firstOrNull { it.playerId == player.playerId }
+                        val markedUnavailable = availabilityByPlayer[player.playerId]?.isAvailableForHalf(target.halfNumber) == false
+                        val injured = availabilityByPlayer[player.playerId]?.isInjured == true
+                        val duplicateIntoEmptyExtra = current == null && rowAssignment != null
+                        OutlinedButton(
+                            onClick = {
+                                onAssignCell(
+                                    target.halfNumber,
+                                    target.roundIndex,
+                                    target.position,
+                                    player.playerId,
+                                    LineupEditScope.THIS_ROTATION,
+                                )
+                                pickerTarget = null
+                            },
+                            enabled = !readOnly && !duplicateIntoEmptyExtra,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            val suffix = when {
+                                current?.playerId == player.playerId -> " (current)"
+                                rowAssignment != null -> " (swap from ${rowAssignment.position.label})"
+                                injured -> " (injured)"
+                                markedUnavailable -> " (marked unavailable)"
+                                else -> ""
+                            }
+                            Text("${player.name}$suffix")
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { pickerTarget = null }) {
+                    Text("Close")
+                }
+            },
+        )
+    }
+
+    if (showExtraDialog) {
+        AlertDialog(
+            onDismissRequest = { showExtraDialog = false },
+            title = { Text("Add extra player slot") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Choose the extra-player role. The slot is added to the selected rotation.")
+                    ExtraPlayerType.entries.forEach { type ->
+                        OutlinedButton(
+                            onClick = {
+                                onAddExtraSlot(type, halfNumber, selectedRound, LineupEditScope.THIS_ROTATION)
+                                showExtraDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(type.label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showExtraDialog = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
+    Card(modifier = modifier.fillMaxWidth()) {
+        Column(Modifier.padding(if (compact) 12.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text("Half $halfNumber lineup board", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        if (highlightedRound == null) {
+                            "Tap any cell to change a rotation."
+                        } else {
+                            "Current row is highlighted. Next sub round only moves the highlight."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (allowStructureEdit) {
+                    OutlinedButton(onClick = { showExtraDialog = true }) {
+                        Text("Add extra player")
+                    }
+                }
+            }
+
+            BoardGroupSummary(detail = detail, halfNumber = halfNumber)
+            BoardLegend()
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "Bench panel follows selected rotation: R$selectedRound. Tap a row label to inspect another rotation.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            val duplicateWarnings = visibleRounds.flatMap { round ->
+                detail.assignments
+                    .filter { it.halfNumber == halfNumber && it.roundIndex == round }
+                    .groupBy { it.playerId }
+                    .filterValues { it.size > 1 }
+                    .keys
+                    .mapNotNull { playerLookup[it] }
+                    .map { "Rotation $round has $it listed more than once." }
+            }
+            val emptyWarnings = visibleRounds.flatMap { round ->
+                val rowPositions = detail.assignments
+                    .filter { it.halfNumber == halfNumber && it.roundIndex == round }
+                    .map { it.position }
+                    .toSet()
+                template.activePositions
+                    .filterNot { it in rowPositions }
+                    .map { "Rotation $round is missing ${it.label}." }
+            }
+            (duplicateWarnings + emptyWarnings).take(3).forEach { warning ->
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = MaterialTheme.shapes.medium,
+                ) {
+                    Text(warning, modifier = Modifier.padding(10.dp), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val benchSideBySide = maxWidth > 780.dp
+                val benchWidth = if (benchSideBySide) 220.dp else maxWidth
+                val boardWidth = if (benchSideBySide) {
+                    (maxWidth - benchWidth - 12.dp).coerceAtLeast(360.dp)
+                } else {
+                    maxWidth
+                }
+                val rowHeaderWidth = if (boardWidth < 560.dp) 54.dp else 82.dp
+                val cellWidth = (((boardWidth - rowHeaderWidth).value / positions.size.coerceAtLeast(1)).dp)
+                    .coerceAtLeast(40.dp)
+                val cellHeight = when {
+                    cellWidth < 58.dp -> 46.dp
+                    cellWidth < 78.dp -> 52.dp
+                    else -> 60.dp
+                }
+                val cellFontSize = when {
+                    cellWidth < 52.dp -> 8.sp
+                    cellWidth < 70.dp -> 9.sp
+                    cellWidth < 92.dp -> 10.sp
+                    else -> 12.sp
+                }
+                val headerFontSize = when {
+                    cellWidth < 58.dp -> 7.sp
+                    cellWidth < 78.dp -> 8.sp
+                    else -> 10.sp
+                }
+                val boardContent: @Composable () -> Unit = {
+                    Column(Modifier.width(boardWidth)) {
+                        Row {
+                            BoardHeaderCell(
+                                text = "Rot",
+                                width = rowHeaderWidth,
+                                height = cellHeight,
+                                fontSize = headerFontSize,
+                            )
+                            positions.forEach { position ->
+                                BoardHeaderCell(
+                                    text = position.shortLabel(),
+                                    width = cellWidth,
+                                    height = cellHeight,
+                                    fontSize = headerFontSize,
+                                )
+                            }
+                        }
+                        visibleRounds.forEach { round ->
+                            val rowAssignments = detail.assignments.filter {
+                                it.halfNumber == halfNumber && it.roundIndex == round
+                            }
+                            val rowAssignmentByPosition = rowAssignments.associateBy { it.position }
+                            val rowColor = when (round) {
+                                highlightedRound -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                                selectedRound -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+                                else -> Color.Transparent
+                            }
+                            Row(modifier = Modifier.background(rowColor)) {
+                                BoardHeaderCell(
+                                    text = if (round == highlightedRound) "Now" else "R$round",
+                                    width = rowHeaderWidth,
+                                    height = cellHeight,
+                                    fontSize = headerFontSize,
+                                    onClick = { selectedRoundState = round },
+                                    selected = round == selectedRound,
+                                )
+                                positions.forEach { position ->
+                                    val assignment = rowAssignmentByPosition[position]
+                                    val slotActive = position in template.activePositions ||
+                                        extraSlots.any { it.position == position && it.appliesTo(halfNumber, round) }
+                                    val playerName = assignment?.let { playerLookup[it.playerId] }.orEmpty()
+                                    BoardPlayerCell(
+                                        text = when {
+                                            !slotActive -> "-"
+                                            playerName.isBlank() -> "Empty"
+                                            else -> playerName
+                                        },
+                                        active = slotActive,
+                                        tone = assignment?.let { boardPlayerTone(detail.assignments, it) } ?: BoardPlayerTone.NORMAL,
+                                        positionChangeAlert = assignment?.let {
+                                            stayedOnAndChangedPosition(detail.assignments, it)
+                                        } == true,
+                                        emphasized = assignment != null && availabilityByPlayer[assignment.playerId]?.isInjured == true,
+                                        width = cellWidth,
+                                        height = cellHeight,
+                                        fontSize = cellFontSize,
+                                        onClick = {
+                                            selectedRoundState = round
+                                            if (
+                                                assignment != null &&
+                                                round == highlightedRound &&
+                                                onOpenAssignmentActions != null
+                                            ) {
+                                                onOpenAssignmentActions(assignment)
+                                            } else if (slotActive && !readOnly) {
+                                                pickerTarget = "$halfNumber|$round|${position.name}"
+                                            }
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                if (benchSideBySide) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
+                        boardContent()
+                        BoardBenchPanel(
+                            modifier = Modifier.width(benchWidth),
+                            selectedRound = selectedRound,
+                            benchPlayers = benchPlayers,
+                            unavailablePlayers = unavailablePlayers,
+                            assignments = detail.assignments,
+                            halfNumber = halfNumber,
+                            readOnly = readOnly,
+                            onToggleAvailability = onToggleAvailability,
+                        )
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        boardContent()
+                        BoardBenchPanel(
+                            modifier = Modifier.fillMaxWidth(),
+                            selectedRound = selectedRound,
+                            benchPlayers = benchPlayers,
+                            unavailablePlayers = unavailablePlayers,
+                            assignments = detail.assignments,
+                            halfNumber = halfNumber,
+                            readOnly = readOnly,
+                            onToggleAvailability = onToggleAvailability,
+                        )
+                    }
+                }
+            }
+
+            if (extraSlots.isNotEmpty() && allowStructureEdit) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    extraSlots.forEach { slot ->
+                        OutlinedButton(onClick = { onRemoveExtraSlot(slot.slotId) }) {
+                            Text("Remove ${slot.type.label} R${slot.startRound}-${slot.endRound}")
+                        }
+                    }
+                }
+            }
+
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BoardGroupSummary(detail: GameDetail, halfNumber: Int) {
+    val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
+    val halfAssignments = detail.assignments.filter { it.halfNumber == halfNumber }
+    val summary = detail.game.template().formation.groupOrder.associateWith { group ->
+        halfAssignments
+            .filter { it.positionGroup == group }
+            .mapNotNull { playerLookup[it.playerId] }
+            .distinct()
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Half $halfNumber position groups", style = MaterialTheme.typography.titleSmall)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            summary.forEach { (group, players) ->
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                    shape = MaterialTheme.shapes.medium,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                        Text(group.label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            players.joinToString().ifBlank { "None" },
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BoardLegend() {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BoardLegendItem("Pink", BoardPlayerTone.SECOND_STRAIGHT, "2nd straight rotation")
+        BoardLegendItem("Red", BoardPlayerTone.LONG_RUN, "3+ straight rotations")
+        BoardLegendOutlineItem("Yellow outline", "stays on, changes position")
+        BoardLegendItem("Green", BoardPlayerTone.BENCH_WAIT, "sat 2+ rotations")
+        BoardLegendItem("Gray", BoardPlayerTone.UNAVAILABLE, "unavailable / injured")
+    }
+}
+
+@Composable
+private fun BoardLegendItem(label: String, tone: BoardPlayerTone, description: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Surface(
+            modifier = Modifier.size(12.dp),
+            color = boardToneColor(tone),
+            shape = MaterialTheme.shapes.small,
+            border = BorderStroke(1.dp, boardToneBorderColor(tone)),
+        ) {}
+        Text("$label = $description", style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+private fun BoardLegendOutlineItem(label: String, description: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Surface(
+            modifier = Modifier.size(12.dp),
+            color = MaterialTheme.colorScheme.surface,
+            shape = MaterialTheme.shapes.small,
+            border = BorderStroke(2.dp, Color(0xFFF9A825)),
+        ) {}
+        Text("$label = $description", style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BoardBenchPanel(
+    modifier: Modifier,
+    selectedRound: Int,
+    benchPlayers: List<PlayerEntity>,
+    unavailablePlayers: List<PlayerEntity>,
+    assignments: List<AssignmentEntity>,
+    halfNumber: Int,
+    readOnly: Boolean,
+    onToggleAvailability: (String, Int, Boolean) -> Unit,
+) {
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Bench R$selectedRound", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Tap a rotation row label to change this bench view.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (benchPlayers.isEmpty()) {
+                Text("No eligible bench players.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    benchPlayers.forEach { player ->
+                        val satCount = consecutiveBenchCount(assignments, player.playerId, halfNumber, selectedRound)
+                        val groupLabel = playerPrimaryGroupLabel(assignments, player.playerId, halfNumber)
+                        BoardBenchChip(
+                            text = buildString {
+                                append(player.name)
+                                if (groupLabel.isNotBlank()) append(" • $groupLabel")
+                                if (satCount >= 2) append(" • sat $satCount")
+                            },
+                            tone = if (satCount >= 2) BoardPlayerTone.BENCH_WAIT else BoardPlayerTone.NORMAL,
+                            onClick = {
+                                if (!readOnly) onToggleAvailability(player.playerId, halfNumber, false)
+                            },
+                        )
+                    }
+                }
+            }
+            if (unavailablePlayers.isNotEmpty()) {
+                HorizontalDivider()
+                Text("Unavailable / injured", style = MaterialTheme.typography.titleSmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    unavailablePlayers.forEach { player ->
+                        BoardBenchChip(
+                            text = "${player.name} • activate",
+                            tone = BoardPlayerTone.UNAVAILABLE,
+                            enabled = !readOnly,
+                            onClick = {
+                                if (!readOnly) onToggleAvailability(player.playerId, halfNumber, true)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BoardBenchChip(
+    text: String,
+    tone: BoardPlayerTone,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.clickable(enabled = enabled, onClick = onClick),
+        color = boardToneColor(tone),
+        shape = MaterialTheme.shapes.large,
+        border = BorderStroke(1.dp, boardToneBorderColor(tone)),
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun BoardHeaderCell(
+    text: String,
+    width: androidx.compose.ui.unit.Dp,
+    height: androidx.compose.ui.unit.Dp,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    onClick: (() -> Unit)? = null,
+    selected: Boolean = false,
+) {
+    Surface(
+        modifier = Modifier
+            .width(width)
+            .height(height)
+            .padding(1.dp)
+            .clickable(enabled = onClick != null) { onClick?.invoke() },
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer,
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Box(contentAlignment = Alignment.CenterStart, modifier = Modifier.padding(horizontal = 8.dp)) {
+            Text(
+                text = text,
+                fontWeight = FontWeight.Bold,
+                fontSize = fontSize,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                color = if (selected) IceWhite else MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+    }
+}
+
+@Composable
+private fun BoardPlayerCell(
+    text: String,
+    active: Boolean,
+    tone: BoardPlayerTone,
+    positionChangeAlert: Boolean,
+    emphasized: Boolean,
+    width: androidx.compose.ui.unit.Dp,
+    height: androidx.compose.ui.unit.Dp,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .width(width)
+            .height(height)
+            .padding(1.dp)
+            .clickable(enabled = active, onClick = onClick),
+        color = when {
+            !active -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+            emphasized -> MaterialTheme.colorScheme.errorContainer
+            else -> boardToneColor(tone)
+        },
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(
+            if (positionChangeAlert) 2.dp else 1.dp,
+            if (positionChangeAlert) Color(0xFFF9A825) else boardToneBorderColor(tone),
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = text,
+                modifier = Modifier.weight(1f),
+                maxLines = if (width < 58.dp) 3 else 2,
+                overflow = TextOverflow.Ellipsis,
+                fontSize = fontSize,
+                lineHeight = (fontSize.value + 1).sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private enum class BoardPlayerTone {
+    NORMAL,
+    SECOND_STRAIGHT,
+    LONG_RUN,
+    VERY_LONG_RUN,
+    BENCH_WAIT,
+    UNAVAILABLE,
+}
+
+@Composable
+private fun boardToneColor(tone: BoardPlayerTone): Color = when (tone) {
+    BoardPlayerTone.NORMAL -> MaterialTheme.colorScheme.surface
+    BoardPlayerTone.SECOND_STRAIGHT -> Color(0xFFFFF1F1)
+    BoardPlayerTone.LONG_RUN -> Color(0xFFFFD6D0)
+    BoardPlayerTone.VERY_LONG_RUN -> Color(0xFFFFB3A8)
+    BoardPlayerTone.BENCH_WAIT -> Color(0xFFC8E6C9)
+    BoardPlayerTone.UNAVAILABLE -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f)
+}
+
+@Composable
+private fun boardToneBorderColor(tone: BoardPlayerTone): Color = when (tone) {
+    BoardPlayerTone.NORMAL -> MaterialTheme.colorScheme.outlineVariant
+    BoardPlayerTone.SECOND_STRAIGHT -> Color(0xFFEFA5A5)
+    BoardPlayerTone.LONG_RUN,
+    BoardPlayerTone.VERY_LONG_RUN -> MaterialTheme.colorScheme.error
+    BoardPlayerTone.BENCH_WAIT -> Color(0xFF2E7D32)
+    BoardPlayerTone.UNAVAILABLE -> MaterialTheme.colorScheme.outlineVariant
+}
+
+private fun boardPlayerTone(assignments: List<AssignmentEntity>, assignment: AssignmentEntity): BoardPlayerTone {
+    val runLength = consecutivePlayedCount(assignments, assignment.playerId, assignment.halfNumber, assignment.roundIndex)
+    return when {
+        runLength >= 4 -> BoardPlayerTone.VERY_LONG_RUN
+        runLength >= 3 -> BoardPlayerTone.LONG_RUN
+        runLength == 2 -> BoardPlayerTone.SECOND_STRAIGHT
+        else -> BoardPlayerTone.NORMAL
+    }
+}
+
+private fun consecutivePlayedCount(
+    assignments: List<AssignmentEntity>,
+    playerId: String,
+    halfNumber: Int,
+    roundIndex: Int,
+): Int {
+    var count = 0
+    var round = roundIndex
+    while (round >= 1 && assignments.any { it.halfNumber == halfNumber && it.roundIndex == round && it.playerId == playerId }) {
+        count += 1
+        round -= 1
+    }
+    return count
+}
+
+private fun stayedOnAndChangedPosition(assignments: List<AssignmentEntity>, assignment: AssignmentEntity): Boolean {
+    val previous = assignments.firstOrNull {
+        it.halfNumber == assignment.halfNumber &&
+            it.roundIndex == assignment.roundIndex - 1 &&
+            it.playerId == assignment.playerId
+    } ?: return false
+    return previous.position != assignment.position
+}
+
+private fun consecutiveBenchCount(
+    assignments: List<AssignmentEntity>,
+    playerId: String,
+    halfNumber: Int,
+    roundIndex: Int,
+): Int {
+    var count = 0
+    var round = roundIndex - 1
+    while (round >= 1 && assignments.none { it.halfNumber == halfNumber && it.roundIndex == round && it.playerId == playerId }) {
+        count += 1
+        round -= 1
+    }
+    return count
+}
+
+private fun playerPrimaryGroupLabel(
+    assignments: List<AssignmentEntity>,
+    playerId: String,
+    halfNumber: Int,
+): String =
+    assignments
+        .filter { it.playerId == playerId && it.halfNumber == halfNumber }
+        .groupingBy { it.positionGroup }
+        .eachCount()
+        .maxByOrNull { it.value }
+        ?.key
+        ?.label
+        .orEmpty()
+
+private fun FieldPosition.shortLabel(): String = when (this) {
+    FieldPosition.LEFT_DEFENSE -> "LD"
+    FieldPosition.CENTER_DEFENSE -> "CD"
+    FieldPosition.RIGHT_DEFENSE -> "RD"
+    FieldPosition.LEFT_MIDFIELDER -> "LM"
+    FieldPosition.CENTER_MIDFIELDER -> "CM"
+    FieldPosition.RIGHT_MIDFIELDER -> "RM"
+    FieldPosition.STRIKER -> "ST"
+    FieldPosition.GOALIE -> "GK"
+    FieldPosition.EXTRA_ATTACK -> "Extra A"
+    FieldPosition.EXTRA_MIDFIELD -> "Extra M"
+    FieldPosition.EXTRA_DEFENSE -> "Extra D"
 }
 
 @Composable
@@ -5766,24 +6524,22 @@ private fun ClockCard(
     modifier: Modifier = Modifier,
     label: String,
     value: String,
-    sublabel: String,
     valueColor: Color = MaterialTheme.colorScheme.onSurface,
 ) {
     Surface(modifier = modifier, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceVariant) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text(label, style = MaterialTheme.typography.titleLarge)
+            Text(label, style = MaterialTheme.typography.titleMedium)
             Text(
                 value,
                 style = MaterialTheme.typography.headlineMedium,
                 fontFamily = FontFamily.Monospace,
                 color = valueColor,
             )
-            Text(sublabel)
         }
     }
 }

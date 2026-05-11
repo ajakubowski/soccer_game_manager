@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import com.example.soccergamemanager.domain.FieldPosition
 import kotlinx.coroutines.flow.Flow
 
 data class GameAssignmentCount(
@@ -127,6 +128,23 @@ interface AssignmentDao {
 
     @Query("DELETE FROM assignments WHERE gameId = :gameId")
     suspend fun deleteByGame(gameId: String)
+
+    @Query(
+        """
+        DELETE FROM assignments
+        WHERE gameId = :gameId
+            AND halfNumber = :halfNumber
+            AND position = :position
+            AND roundIndex BETWEEN :startRound AND :endRound
+        """,
+    )
+    suspend fun deletePositionRange(
+        gameId: String,
+        halfNumber: Int,
+        position: FieldPosition,
+        startRound: Int,
+        endRound: Int,
+    )
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<AssignmentEntity>)

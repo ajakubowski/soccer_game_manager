@@ -9,10 +9,12 @@ import com.example.soccergamemanager.data.PlayerEntity
 import com.example.soccergamemanager.data.SeasonEntity
 import com.example.soccergamemanager.data.SettingsStore
 import com.example.soccergamemanager.data.SoccerRepository
+import com.example.soccergamemanager.domain.ExtraPlayerType
 import com.example.soccergamemanager.domain.FieldPosition
 import com.example.soccergamemanager.domain.GameStatus
 import com.example.soccergamemanager.domain.GoalSide
 import com.example.soccergamemanager.domain.FormationType
+import com.example.soccergamemanager.domain.LineupEditScope
 import com.example.soccergamemanager.domain.PositionGroup
 import com.example.soccergamemanager.domain.PrintableReport
 import com.example.soccergamemanager.domain.TeamMetrics
@@ -480,6 +482,48 @@ class MainViewModel(
             refreshReport()
             refreshMetrics()
             message.value = "Position corrected."
+        }
+    }
+
+    fun assignLineupBoardCell(
+        halfNumber: Int,
+        roundIndex: Int,
+        position: FieldPosition,
+        replacementPlayerId: String,
+        scope: LineupEditScope,
+    ) {
+        val gameId = selectedGameId.value ?: return
+        launchTask {
+            repository.assignLineupBoardCell(
+                gameId = gameId,
+                halfNumber = halfNumber,
+                roundIndex = roundIndex,
+                position = position,
+                replacementPlayerId = replacementPlayerId,
+                scope = scope,
+            )
+            refreshReport()
+            refreshMetrics()
+            message.value = "Lineup board updated."
+        }
+    }
+
+    fun addExtraLineupSlot(type: ExtraPlayerType, halfNumber: Int, roundIndex: Int, scope: LineupEditScope) {
+        val gameId = selectedGameId.value ?: return
+        launchTask {
+            repository.addExtraLineupSlot(gameId, type, halfNumber, roundIndex, scope)
+            refreshReport()
+            message.value = "${type.label} slot added."
+        }
+    }
+
+    fun removeExtraLineupSlot(slotId: String) {
+        val gameId = selectedGameId.value ?: return
+        launchTask {
+            repository.removeExtraLineupSlot(gameId, slotId)
+            refreshReport()
+            refreshMetrics()
+            message.value = "Extra player slot removed."
         }
     }
 

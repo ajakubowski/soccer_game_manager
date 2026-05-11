@@ -5,6 +5,7 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.example.soccergamemanager.domain.FieldPosition
+import com.example.soccergamemanager.domain.ExtraLineupSlot
 import com.example.soccergamemanager.domain.GameStatus
 import com.example.soccergamemanager.domain.GameTemplateConfig
 import com.example.soccergamemanager.domain.GoalSide
@@ -74,6 +75,7 @@ data class GameEntity(
     val status: GameStatus = GameStatus.PLANNED,
     val templateJson: String,
     val manualGroupLocksJson: String = "[]",
+    val extraLineupSlotsJson: String = "[]",
     val plannerNotes: String = "",
     val liveNotes: String = "",
     val postGameNotes: String = "",
@@ -193,6 +195,10 @@ fun GameEntity.template(): GameTemplateConfig = appJson.decodeFromString(templat
 
 fun GameEntity.manualGroupLocks(): List<ManualGroupLock> = appJson.decodeFromString(manualGroupLocksJson)
 
+fun GameEntity.extraLineupSlots(): List<ExtraLineupSlot> = appJson.decodeFromString(extraLineupSlotsJson)
+
 fun GameTemplateConfig.toJson(): String = appJson.encodeToString(this)
 
 fun List<ManualGroupLock>.toJson(): String = appJson.encodeToString(this)
+
+fun List<ExtraLineupSlot>.toExtraLineupSlotsJson(): String = appJson.encodeToString(this)

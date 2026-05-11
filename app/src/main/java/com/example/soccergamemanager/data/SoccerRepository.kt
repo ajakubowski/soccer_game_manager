@@ -3,9 +3,12 @@ package com.example.soccergamemanager.data
 import com.example.soccergamemanager.domain.GameStatus
 import com.example.soccergamemanager.domain.GameTemplateConfig
 import com.example.soccergamemanager.domain.GoalSide
+import com.example.soccergamemanager.domain.ExtraLineupSlot
+import com.example.soccergamemanager.domain.ExtraPlayerType
 import com.example.soccergamemanager.domain.FieldPosition
 import com.example.soccergamemanager.domain.FormationConfig
 import com.example.soccergamemanager.domain.FormationType
+import com.example.soccergamemanager.domain.LineupEditScope
 import com.example.soccergamemanager.domain.LineupGenerationResult
 import com.example.soccergamemanager.domain.LineupGenerator
 import com.example.soccergamemanager.domain.LineupPlayer
@@ -572,6 +575,102 @@ class SoccerRepository(
         assignmentDao.updateAssignments(updates)
     }
 
+    suspend fun assignLineupBoardCell(
+        gameId: String,
+        halfNumber: Int,
+        roundIndex: Int,
+        position: FieldPosition,
+        replacementPlayerId: String,
+        scope: LineupEditScope,
+    ) {
+        val game = gameDao.getGame(gameId) ?: return
+        val replacement = playerDao.getPlayersBySeason(game.seasonId)
+            .firstOrNull { it.playerId == replacementPlayerId && it.active }
+            ?: return
+        val template = game.template()
+        val extraSlots = game.extraLineupSlots()
+        val isBasePosition = position in template.activePositions
+        val extraSlot = extraSlots.firstOrNull { it.position == position && it.appliesTo(halfNumber, roundIndex) }
+        if (!isBasePosition && extraSlot == null) return
+
+        val rounds = roundsForScope(scope, roundIndex, template.roundsPerHalf)
+            .filter { targetRound ->
+                isBasePosition || extraSlots.any { it.position == position && it.appliesTo(halfNumber, targetRound) }
+            }
+        val allAssignments = assignmentDao.getByGame(gameId)
+        val updates = mutableListOf<AssignmentEntity>()
+        val inserts = mutableListOf<AssignmentEntity>()
+        rounds.forEach { targetRound ->
+            val rowAssignments = allAssignments.filter {
+                it.halfNumber == halfNumber && it.roundIndex == targetRound
+            }
+            val target = rowAssignments.firstOrNull { it.position == position }
+            val swapAssignment = rowAssignments.firstOrNull {
+                it.position != position && it.playerId == replacement.playerId
+            }
+            if (target != null) {
+                updates += target.copy(
+                    playerId = replacement.playerId,
+                    positionGroup = groupForBoardPosition(template, position),
+                )
+                if (swapAssignment != null) {
+                    updates += swapAssignment.copy(playerId = target.playerId)
+                }
+            } else if (swapAssignment == null) {
+                inserts += AssignmentEntity(
+                    assignmentId = UUID.randomUUID().toString(),
+                    gameId = gameId,
+                    playerId = replacement.playerId,
+                    halfNumber = halfNumber,
+                    roundIndex = targetRound,
+                    position = position,
+                    positionGroup = groupForBoardPosition(template, position),
+                )
+            }
+        }
+        if (updates.isNotEmpty()) assignmentDao.updateAssignments(updates)
+        if (inserts.isNotEmpty()) assignmentDao.insertAll(inserts)
+    }
+
+    suspend fun addExtraLineupSlot(
+        gameId: String,
+        type: ExtraPlayerType,
+        halfNumber: Int,
+        roundIndex: Int,
+        scope: LineupEditScope,
+    ) {
+        val game = gameDao.getGame(gameId) ?: return
+        if (game.status == GameStatus.FINAL) return
+        val template = game.template()
+        val rounds = roundsForScope(scope, roundIndex, template.roundsPerHalf)
+        val startRound = rounds.minOrNull() ?: roundIndex
+        val endRound = rounds.maxOrNull() ?: roundIndex
+        val slots = game.extraLineupSlots()
+        val updatedSlots = slots + ExtraLineupSlot(
+            slotId = UUID.randomUUID().toString(),
+            type = type,
+            halfNumber = halfNumber,
+            startRound = startRound,
+            endRound = endRound,
+        )
+        gameDao.updateGame(game.copy(extraLineupSlotsJson = updatedSlots.toExtraLineupSlotsJson()))
+    }
+
+    suspend fun removeExtraLineupSlot(gameId: String, slotId: String) {
+        val game = gameDao.getGame(gameId) ?: return
+        if (game.status == GameStatus.FINAL) return
+        val slot = game.extraLineupSlots().firstOrNull { it.slotId == slotId } ?: return
+        assignmentDao.deletePositionRange(
+            gameId = gameId,
+            halfNumber = slot.halfNumber,
+            position = slot.position,
+            startRound = slot.startRound,
+            endRound = slot.endRound,
+        )
+        val updatedSlots = game.extraLineupSlots().filterNot { it.slotId == slotId }
+        gameDao.updateGame(game.copy(extraLineupSlotsJson = updatedSlots.toExtraLineupSlotsJson()))
+    }
+
     suspend fun applyLiveSub(assignmentId: String, replacementPlayerId: String) {
         val assignment = assignmentDao.getAssignment(assignmentId) ?: return
         val game = gameDao.getGame(assignment.gameId) ?: return
@@ -1008,6 +1107,20 @@ class SoccerRepository(
 
         return if (returningPlayer.preferredKeeper) PositionGroup.GOALIE else PositionGroup.DEFENSE
     }
+
+    private fun roundsForScope(scope: LineupEditScope, roundIndex: Int, roundsPerHalf: Int): IntRange =
+        when (scope) {
+            LineupEditScope.THIS_ROTATION -> roundIndex..roundIndex
+            LineupEditScope.ROTATION_FORWARD -> roundIndex..roundsPerHalf
+            LineupEditScope.REST_OF_HALF -> 1..roundsPerHalf
+        }
+
+    private fun groupForBoardPosition(template: GameTemplateConfig, position: FieldPosition): PositionGroup =
+        if (position in template.activePositions) {
+            template.formation.groupForPosition(position)
+        } else {
+            position.group
+        }
 
     private fun determinePreferredPositions(
         assignments: List<AssignmentEntity>,

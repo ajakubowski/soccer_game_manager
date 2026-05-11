@@ -21,6 +21,41 @@ enum class FieldPosition(val label: String, val group: PositionGroup) {
     CENTER_MIDFIELDER("Center Midfielder", PositionGroup.CM_STRIKER),
     RIGHT_MIDFIELDER("Right Midfielder", PositionGroup.LR_MID),
     STRIKER("Striker", PositionGroup.CM_STRIKER),
+    EXTRA_ATTACK("Extra Attack", PositionGroup.ATTACK),
+    EXTRA_MIDFIELD("Extra Midfield", PositionGroup.LR_MID),
+    EXTRA_DEFENSE("Extra Defense", PositionGroup.DEFENSE),
+}
+
+@Serializable
+enum class ExtraPlayerType(val label: String, val position: FieldPosition, val group: PositionGroup) {
+    EXTRA_ATTACK("Extra Attack", FieldPosition.EXTRA_ATTACK, PositionGroup.ATTACK),
+    EXTRA_MIDFIELD("Extra Midfield", FieldPosition.EXTRA_MIDFIELD, PositionGroup.LR_MID),
+    EXTRA_DEFENSE("Extra Defense", FieldPosition.EXTRA_DEFENSE, PositionGroup.DEFENSE),
+}
+
+@Serializable
+enum class LineupEditScope(val label: String) {
+    THIS_ROTATION("This rotation only"),
+    ROTATION_FORWARD("This rotation forward"),
+    REST_OF_HALF("Rest of half"),
+}
+
+@Serializable
+data class ExtraLineupSlot(
+    val slotId: String,
+    val type: ExtraPlayerType,
+    val halfNumber: Int,
+    val startRound: Int,
+    val endRound: Int,
+) {
+    val position: FieldPosition
+        get() = type.position
+
+    val positionGroup: PositionGroup
+        get() = type.group
+
+    fun appliesTo(half: Int, round: Int): Boolean =
+        half == halfNumber && round in startRound..endRound
 }
 
 @Serializable
@@ -153,6 +188,9 @@ data class GameTemplateConfig(
             FieldPosition.RIGHT_MIDFIELDER,
             FieldPosition.STRIKER,
             FieldPosition.GOALIE,
+            FieldPosition.EXTRA_ATTACK,
+            FieldPosition.EXTRA_MIDFIELD,
+            FieldPosition.EXTRA_DEFENSE,
         )
 
         val DEFAULT_POSITIONS = CLASSIC_U9_POSITIONS
