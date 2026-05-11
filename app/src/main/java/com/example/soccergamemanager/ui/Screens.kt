@@ -90,6 +90,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -2610,10 +2611,11 @@ private fun LiveScreen(
                     allowStructureEdit = detail.game.status != GameStatus.FINAL,
                     onAssignCell = onAssignLineupBoardCell,
                     onAddExtraSlot = onAddExtraLineupSlot,
-                    onRemoveExtraSlot = onRemoveExtraLineupSlot,
-                    onToggleAvailability = onToggleAvailability,
-                    onOpenAssignmentActions = { selectedAssignmentId = it.assignmentId },
-                )
+                        onRemoveExtraSlot = onRemoveExtraLineupSlot,
+                        onToggleAvailability = onToggleAvailability,
+                        liveMode = true,
+                        onOpenAssignmentActions = { selectedAssignmentId = it.assignmentId },
+                    )
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Top) {
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         InjuredPlayersCard(
@@ -2686,6 +2688,7 @@ private fun LiveScreen(
                     onAddExtraSlot = onAddExtraLineupSlot,
                     onRemoveExtraSlot = onRemoveExtraLineupSlot,
                     onToggleAvailability = onToggleAvailability,
+                    liveMode = true,
                     onOpenAssignmentActions = { selectedAssignmentId = it.assignmentId },
                 )
                 InjuredPlayersCard(
@@ -3811,6 +3814,7 @@ private fun LineupBoardCard(
     onToggleAvailability: (String, Int, Boolean) -> Unit,
     modifier: Modifier = Modifier,
     allowStructureEdit: Boolean = true,
+    liveMode: Boolean = false,
     onOpenAssignmentActions: ((AssignmentEntity) -> Unit)? = null,
 ) {
     val template = detail.game.template()
@@ -3850,6 +3854,9 @@ private fun LineupBoardCard(
     }
     var showExtraDialog by rememberSaveable(detail.game.gameId, halfNumber) {
         mutableStateOf(false)
+    }
+    var showLiveSubPreview by rememberSaveable(detail.game.gameId, halfNumber) {
+        mutableStateOf(true)
     }
 
     pickerTarget?.let { encoded ->
@@ -3970,6 +3977,15 @@ private fun LineupBoardCard(
 
             BoardGroupSummary(detail = detail, halfNumber = halfNumber)
             BoardLegend()
+            if (liveMode && highlightedRound != null) {
+                LiveSubChangeSummary(
+                    detail = detail,
+                    halfNumber = halfNumber,
+                    currentRound = highlightedRound,
+                    expanded = showLiveSubPreview,
+                    onToggleExpanded = { showLiveSubPreview = !showLiveSubPreview },
+                )
+            }
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
@@ -4056,9 +4072,11 @@ private fun LineupBoardCard(
                                 it.halfNumber == halfNumber && it.roundIndex == round
                             }
                             val rowAssignmentByPosition = rowAssignments.associateBy { it.position }
-                            val rowColor = when (round) {
-                                highlightedRound -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
-                                selectedRound -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+                            val rowColor = when {
+                                liveMode && highlightedRound != null && round < highlightedRound ->
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                round == highlightedRound -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                                round == selectedRound -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
                                 else -> Color.Transparent
                             }
                             Row(modifier = Modifier.background(rowColor)) {
@@ -4087,6 +4105,7 @@ private fun LineupBoardCard(
                                             stayedOnAndChangedPosition(detail.assignments, it)
                                         } == true,
                                         emphasized = assignment != null && availabilityByPlayer[assignment.playerId]?.isInjured == true,
+                                        completed = liveMode && highlightedRound != null && round < highlightedRound,
                                         width = cellWidth,
                                         height = cellHeight,
                                         fontSize = cellFontSize,
@@ -4149,6 +4168,105 @@ private fun LineupBoardCard(
                 }
             }
 
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun LiveSubChangeSummary(
+    detail: GameDetail,
+    halfNumber: Int,
+    currentRound: Int,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+) {
+    val nextRound = currentRound + 1
+    val template = detail.game.template()
+    if (nextRound > template.roundsPerHalf) return
+    val playerLookup = detail.players.associateBy({ it.playerId }, { it.name })
+    val currentAssignments = detail.assignments.filter { it.halfNumber == halfNumber && it.roundIndex == currentRound }
+    val nextAssignments = detail.assignments.filter { it.halfNumber == halfNumber && it.roundIndex == nextRound }
+    if (currentAssignments.isEmpty() || nextAssignments.isEmpty()) return
+
+    val currentPlayerIds = currentAssignments.map { it.playerId }.toSet()
+    val nextPlayerIds = nextAssignments.map { it.playerId }.toSet()
+    val staying = nextAssignments.filter { it.playerId in currentPlayerIds }
+    val comingOff = currentAssignments.filter { it.playerId !in nextPlayerIds }
+    val comingOn = nextAssignments.filter { it.playerId !in currentPlayerIds }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggleExpanded() },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Next sub round preview", style = MaterialTheme.typography.titleSmall)
+                TextButton(onClick = onToggleExpanded) {
+                    Text(if (expanded) "Hide" else "Show")
+                }
+            }
+            if (expanded) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LiveChangeGroup(
+                        label = "Off",
+                        assignments = comingOff,
+                        playerLookup = playerLookup,
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        prefix = "out",
+                    )
+                    LiveChangeGroup(
+                        label = "On",
+                        assignments = comingOn,
+                        playerLookup = playerLookup,
+                        color = Color(0xFFC8E6C9),
+                        contentColor = BadgeBlack,
+                        prefix = "in",
+                    )
+                    LiveChangeGroup(
+                        label = "Stay",
+                        assignments = staying,
+                        playerLookup = playerLookup,
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        prefix = "stay",
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveChangeGroup(
+    label: String,
+    assignments: List<AssignmentEntity>,
+    playerLookup: Map<String, String>,
+    color: Color,
+    contentColor: Color,
+    prefix: String,
+) {
+    if (assignments.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+        assignments.forEach { assignment ->
+            Surface(color = color, contentColor = contentColor, shape = MaterialTheme.shapes.large) {
+                Text(
+                    "${playerLookup[assignment.playerId].orEmpty()} -> $prefix ${assignment.position.shortLabel()}",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -4353,6 +4471,7 @@ private fun BoardPlayerCell(
     tone: BoardPlayerTone,
     positionChangeAlert: Boolean,
     emphasized: Boolean,
+    completed: Boolean,
     width: androidx.compose.ui.unit.Dp,
     height: androidx.compose.ui.unit.Dp,
     fontSize: androidx.compose.ui.unit.TextUnit,
@@ -4366,6 +4485,7 @@ private fun BoardPlayerCell(
             .clickable(enabled = active, onClick = onClick),
         color = when {
             !active -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+            completed -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
             emphasized -> MaterialTheme.colorScheme.errorContainer
             else -> boardToneColor(tone)
         },
@@ -4391,6 +4511,7 @@ private fun BoardPlayerCell(
                 lineHeight = (fontSize.value + 1).sp,
                 fontWeight = FontWeight.SemiBold,
                 color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                textDecoration = if (completed) TextDecoration.LineThrough else null,
             )
         }
     }
