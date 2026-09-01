@@ -272,6 +272,11 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                         onImportBackup = viewModel::importBackup,
                         onUpdatePlayer = viewModel::updatePlayerDetails,
                         onTogglePlayerActive = viewModel::togglePlayerActive,
+                        onDownloadCloudTeam = viewModel::downloadCloudTeam,
+                        onSyncNow = viewModel::syncNow,
+                        onDisconnectCloud = viewModel::disconnectCloud,
+                        onKeepLocalConflict = viewModel::keepLocalConflict,
+                        onUseCloudConflict = viewModel::useCloudConflict,
                     )
                 }
                 composable(Destination.Games.route) {
@@ -314,7 +319,10 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                         onSetAssignmentPosition = viewModel::setAssignmentPosition,
                         onAssignLineupBoardCell = viewModel::assignLineupBoardCell,
                         onAddExtraLineupSlot = viewModel::addExtraLineupSlot,
+                        onClearExtraLineupCell = viewModel::clearExtraLineupCell,
                         onRemoveExtraLineupSlot = viewModel::removeExtraLineupSlot,
+                        onPublishLineup = viewModel::publishLineup,
+                        onDownloadForMatch = viewModel::downloadForMatch,
                         onStartOrPause = viewModel::startOrPauseClock,
                         onAdvanceRound = viewModel::advanceRound,
                         onAdvanceHalf = viewModel::advanceHalf,
@@ -363,6 +371,11 @@ private fun SetupScreen(
     onImportBackup: (String) -> Unit,
     onUpdatePlayer: (PlayerEntity, String, String, Boolean, String) -> Unit,
     onTogglePlayerActive: (PlayerEntity) -> Unit,
+    onDownloadCloudTeam: (String, String, String) -> Unit,
+    onSyncNow: () -> Unit,
+    onDisconnectCloud: () -> Unit,
+    onKeepLocalConflict: (String) -> Unit,
+    onUseCloudConflict: (String) -> Unit,
 ) {
     val context = LocalContext.current
     var pendingImportJson by rememberSaveable { mutableStateOf<String?>(null) }
@@ -414,6 +427,29 @@ private fun SetupScreen(
         ((halfMinutes + roundMinutes - 1) / roundMinutes) + 1
     }
     val editingPlayer = uiState.players.firstOrNull { it.playerId == editingPlayerId }
+    var cloudServiceUrl by rememberSaveable(uiState.selectedSeasonId) {
+        mutableStateOf("https://soccer-game-manager-collab.jakubowski-andy.workers.dev")
+    }
+    var pairingCode by rememberSaveable(uiState.selectedSeasonId) { mutableStateOf("") }
+    var deviceName by rememberSaveable(uiState.selectedSeasonId) { mutableStateOf("Sideline tablet") }
+    var confirmDisconnect by rememberSaveable { mutableStateOf(false) }
+
+    if (confirmDisconnect) {
+        AlertDialog(
+            onDismissRequest = { confirmDisconnect = false },
+            title = { Text("Disconnect cloud team?") },
+            text = { Text("Cloud credentials and sync history will be removed from this tablet. All local team and game data will remain available.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDisconnectCloud()
+                        confirmDisconnect = false
+                    },
+                ) { Text("Disconnect") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDisconnect = false }) { Text("Cancel") } },
+        )
+    }
 
     pendingImportJson?.let { importJson ->
         AlertDialog(
@@ -553,6 +589,92 @@ private fun SetupScreen(
                             enabled = uiState.selectedSeason != null,
                         ) {
                             Text("Delete team")
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            Card {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Cloud collaboration", style = MaterialTheme.typography.titleLarge)
+                    if (uiState.cloudConnection == null) {
+                        Text(
+                            "Build the team and roster in the web app, then generate a pairing code from Access. Downloading adds that cloud team as a separate team on this tablet and keeps existing local teams unchanged.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedTextField(
+                            value = cloudServiceUrl,
+                            onValueChange = { cloudServiceUrl = it },
+                            label = { Text("Cloud service URL") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = pairingCode,
+                                onValueChange = { pairingCode = it.uppercase() },
+                                label = { Text("Pairing code") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                            )
+                            OutlinedTextField(
+                                value = deviceName,
+                                onValueChange = { deviceName = it },
+                                label = { Text("Tablet name") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                            )
+                        }
+                        Button(
+                            onClick = { onDownloadCloudTeam(cloudServiceUrl, pairingCode, deviceName) },
+                            enabled = pairingCode.isNotBlank() && deviceName.isNotBlank(),
+                        ) {
+                            Text("Download cloud team")
+                        }
+                    } else {
+                        val state = uiState.syncState
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column {
+                                Text(uiState.cloudConnection.deviceName, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "${state?.status ?: "PENDING"} · Cloud revision ${state?.lastPulledRevision ?: 0}",
+                                    color = when (state?.status) {
+                                        "CONFLICT" -> MaterialTheme.colorScheme.error
+                                        "SYNCED" -> Color(0xFF237A3B)
+                                        else -> MaterialTheme.colorScheme.primary
+                                    },
+                                )
+                                state?.lastError?.takeIf { it.isNotBlank() }?.let {
+                                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = onSyncNow, enabled = state?.status != "SYNCING") { Text("Sync now") }
+                                TextButton(onClick = { confirmDisconnect = true }) { Text("Disconnect") }
+                            }
+                        }
+                        if (state?.pendingCount ?: 0 > 0) {
+                            Text("${state?.pendingCount} local change(s) are waiting to upload.")
+                        }
+                        uiState.syncConflicts.forEach { conflict ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f),
+                                shape = MaterialTheme.shapes.medium,
+                            ) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("Cloud conflict: ${conflict.entityType}", style = MaterialTheme.typography.titleSmall)
+                                    Text("This item changed on another device after the tablet last downloaded it.")
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = { onKeepLocalConflict(conflict.mutationId) }) { Text("Keep tablet change") }
+                                        OutlinedButton(onClick = { onUseCloudConflict(conflict.mutationId) }) { Text("Use cloud change") }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -979,7 +1101,10 @@ private fun GameHubScreen(
     onSetAssignmentPosition: (String, FieldPosition) -> Unit,
     onAssignLineupBoardCell: (Int, Int, FieldPosition, String, LineupEditScope) -> Unit,
     onAddExtraLineupSlot: (ExtraPlayerType, Int, Int, LineupEditScope) -> Unit,
+    onClearExtraLineupCell: (Int, Int, FieldPosition) -> Unit,
     onRemoveExtraLineupSlot: (String) -> Unit,
+    onPublishLineup: () -> Unit,
+    onDownloadForMatch: () -> Unit,
     onStartOrPause: () -> Unit,
     onAdvanceRound: () -> Unit,
     onAdvanceHalf: (Set<String>) -> Unit,
@@ -1043,7 +1168,10 @@ private fun GameHubScreen(
                     onSetAssignmentPosition = onSetAssignmentPosition,
                     onAssignLineupBoardCell = onAssignLineupBoardCell,
                     onAddExtraLineupSlot = onAddExtraLineupSlot,
+                    onClearExtraLineupCell = onClearExtraLineupCell,
                     onRemoveExtraLineupSlot = onRemoveExtraLineupSlot,
+                    onPublishLineup = onPublishLineup,
+                    onDownloadForMatch = onDownloadForMatch,
                     showHeader = false,
                     onGoToLive = { selectedTab = GameHubTab.LIVE },
                 )
@@ -1061,6 +1189,7 @@ private fun GameHubScreen(
                     onClearPlayerInjury = onClearPlayerInjury,
                     onAssignLineupBoardCell = onAssignLineupBoardCell,
                     onAddExtraLineupSlot = onAddExtraLineupSlot,
+                    onClearExtraLineupCell = onClearExtraLineupCell,
                     onRemoveExtraLineupSlot = onRemoveExtraLineupSlot,
                     onToggleAvailability = onToggleAvailability,
                     onFinalize = onFinalize,
@@ -1334,7 +1463,10 @@ private fun PlannerScreen(
     onSetAssignmentPosition: (String, FieldPosition) -> Unit,
     onAssignLineupBoardCell: (Int, Int, FieldPosition, String, LineupEditScope) -> Unit,
     onAddExtraLineupSlot: (ExtraPlayerType, Int, Int, LineupEditScope) -> Unit,
+    onClearExtraLineupCell: (Int, Int, FieldPosition) -> Unit,
     onRemoveExtraLineupSlot: (String) -> Unit,
+    onPublishLineup: () -> Unit,
+    onDownloadForMatch: () -> Unit,
     showHeader: Boolean = true,
     onGoToLive: (() -> Unit)? = null,
 ) {
@@ -1715,6 +1847,34 @@ private fun PlannerScreen(
                             Text("Go to live")
                         }
                     }
+                    if (uiState.cloudConnection != null) {
+                        OutlinedButton(
+                            onClick = onPublishLineup,
+                            enabled = detail.assignments.isNotEmpty() && !readOnly && uiState.syncState?.status != "SYNCING",
+                        ) {
+                            Text("Publish lineup")
+                        }
+                        OutlinedButton(
+                            onClick = onDownloadForMatch,
+                            enabled = detail.assignments.isNotEmpty() && detail.game.status != GameStatus.FINAL,
+                        ) {
+                            Text("Download for match")
+                        }
+                    }
+                }
+                if (uiState.cloudConnection != null) {
+                    Text(
+                        when (uiState.syncState?.status) {
+                            "SYNCED" -> "Cloud is current${uiState.syncState.lastPublishedLineupVersion?.let { " · Published v$it" }.orEmpty()}"
+                            "CONFLICT" -> "Resolve the cloud conflict in Setup before publishing."
+                            "PENDING" -> "Local changes are waiting to sync."
+                            "OFFLINE" -> "Offline. You can keep planning; changes will upload later."
+                            else -> "Checking cloud status..."
+                        },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        color = if (uiState.syncState?.status == "CONFLICT") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
         }
@@ -1810,6 +1970,7 @@ private fun PlannerScreen(
                         allowStructureEdit = detail.game.status != GameStatus.FINAL,
                         onAssignCell = onAssignLineupBoardCell,
                         onAddExtraSlot = onAddExtraLineupSlot,
+                        onClearExtraCell = onClearExtraLineupCell,
                         onRemoveExtraSlot = onRemoveExtraLineupSlot,
                         onToggleAvailability = onToggleAvailability,
                     )
@@ -1913,6 +2074,7 @@ private fun LiveScreen(
     onClearPlayerInjury: (String, Boolean) -> Unit,
     onAssignLineupBoardCell: (Int, Int, FieldPosition, String, LineupEditScope) -> Unit,
     onAddExtraLineupSlot: (ExtraPlayerType, Int, Int, LineupEditScope) -> Unit,
+    onClearExtraLineupCell: (Int, Int, FieldPosition) -> Unit,
     onRemoveExtraLineupSlot: (String) -> Unit,
     onToggleAvailability: (String, Int, Boolean) -> Unit,
     onFinalize: () -> Unit,
@@ -2611,11 +2773,12 @@ private fun LiveScreen(
                     allowStructureEdit = detail.game.status != GameStatus.FINAL,
                     onAssignCell = onAssignLineupBoardCell,
                     onAddExtraSlot = onAddExtraLineupSlot,
-                        onRemoveExtraSlot = onRemoveExtraLineupSlot,
-                        onToggleAvailability = onToggleAvailability,
-                        liveMode = true,
-                        onOpenAssignmentActions = { selectedAssignmentId = it.assignmentId },
-                    )
+                    onClearExtraCell = onClearExtraLineupCell,
+                    onRemoveExtraSlot = onRemoveExtraLineupSlot,
+                    onToggleAvailability = onToggleAvailability,
+                    liveMode = true,
+                    onOpenAssignmentActions = { selectedAssignmentId = it.assignmentId },
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Top) {
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         InjuredPlayersCard(
@@ -2686,6 +2849,7 @@ private fun LiveScreen(
                     allowStructureEdit = detail.game.status != GameStatus.FINAL,
                     onAssignCell = onAssignLineupBoardCell,
                     onAddExtraSlot = onAddExtraLineupSlot,
+                    onClearExtraCell = onClearExtraLineupCell,
                     onRemoveExtraSlot = onRemoveExtraLineupSlot,
                     onToggleAvailability = onToggleAvailability,
                     liveMode = true,
@@ -3810,6 +3974,7 @@ private fun LineupBoardCard(
     compact: Boolean,
     onAssignCell: (Int, Int, FieldPosition, String, LineupEditScope) -> Unit,
     onAddExtraSlot: (ExtraPlayerType, Int, Int, LineupEditScope) -> Unit,
+    onClearExtraCell: (Int, Int, FieldPosition) -> Unit,
     onRemoveExtraSlot: (String) -> Unit,
     onToggleAvailability: (String, Int, Boolean) -> Unit,
     modifier: Modifier = Modifier,
@@ -3870,6 +4035,9 @@ private fun LineupBoardCard(
             it.halfNumber == target.halfNumber && it.roundIndex == target.roundIndex
         }
         val current = rowAssignments.firstOrNull { it.position == target.position }
+        val targetIsExtraSlot = detail.game.extraLineupSlots().any {
+            it.position == target.position && it.appliesTo(target.halfNumber, target.roundIndex)
+        }
         AlertDialog(
             onDismissRequest = { pickerTarget = null },
             title = { Text("Set ${target.position.label}") },
@@ -3880,6 +4048,19 @@ private fun LineupBoardCard(
                 ) {
                     Text("Half ${target.halfNumber}, rotation ${target.roundIndex}")
                     Text("This updates the selected rotation only.")
+                    if (targetIsExtraSlot) {
+                        OutlinedButton(
+                            onClick = {
+                                onClearExtraCell(target.halfNumber, target.roundIndex, target.position)
+                                pickerTarget = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !readOnly,
+                        ) {
+                            Text("Empty / N/A")
+                        }
+                        HorizontalDivider()
+                    }
                     activePlayers.forEach { player ->
                         val rowAssignment = rowAssignments.firstOrNull { it.playerId == player.playerId }
                         val markedUnavailable = availabilityByPlayer[player.playerId]?.isAvailableForHalf(target.halfNumber) == false
@@ -3926,11 +4107,22 @@ private fun LineupBoardCard(
             title = { Text("Add extra player slot") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Choose the extra-player role. The slot is added to the selected rotation.")
+                    Text(
+                        if (liveMode) {
+                            "Choose the extra-player role. The slot is added for the rest of this half, and carries into Half 2 empty if added in Half 1."
+                        } else {
+                            "Choose the extra-player role. The slot is added to the selected rotation."
+                        },
+                    )
                     ExtraPlayerType.entries.forEach { type ->
                         OutlinedButton(
                             onClick = {
-                                onAddExtraSlot(type, halfNumber, selectedRound, LineupEditScope.THIS_ROTATION)
+                                onAddExtraSlot(
+                                    type,
+                                    halfNumber,
+                                    selectedRound,
+                                    if (liveMode) LineupEditScope.ROTATION_FORWARD else LineupEditScope.THIS_ROTATION,
+                                )
                                 showExtraDialog = false
                             },
                             modifier = Modifier.fillMaxWidth(),

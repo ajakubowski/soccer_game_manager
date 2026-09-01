@@ -16,8 +16,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlayerAvailabilityEntity::class,
         AssignmentEntity::class,
         GoalEventEntity::class,
+        TeamSyncStateEntity::class,
+        EntitySyncVersionEntity::class,
+        PendingMutationEntity::class,
+        SyncConflictEntity::class,
+        GameControllerLeaseEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -28,6 +33,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun availabilityDao(): AvailabilityDao
     abstract fun assignmentDao(): AssignmentDao
     abstract fun goalDao(): GoalDao
+    abstract fun syncDao(): SyncDao
 
     companion object {
         fun build(context: Context): AppDatabase =
@@ -40,6 +46,7 @@ abstract class AppDatabase : RoomDatabase() {
                 .addMigrations(MIGRATION_6_7)
                 .addMigrations(MIGRATION_7_8)
                 .addMigrations(MIGRATION_8_9)
+                .addMigrations(MIGRATION_9_10)
                 .build()
 
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -124,6 +131,87 @@ abstract class AppDatabase : RoomDatabase() {
                 database.execSQL(
                     "ALTER TABLE games ADD COLUMN extraLineupSlotsJson TEXT NOT NULL DEFAULT '[]'",
                 )
+            }
+        }
+
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS team_sync_state (
+                        localTeamId TEXT NOT NULL PRIMARY KEY,
+                        cloudTeamId TEXT NOT NULL,
+                        lastPulledRevision INTEGER NOT NULL DEFAULT 0,
+                        lastSyncAt INTEGER,
+                        status TEXT NOT NULL DEFAULT 'PENDING',
+                        pendingCount INTEGER NOT NULL DEFAULT 0,
+                        conflictCount INTEGER NOT NULL DEFAULT 0,
+                        lastError TEXT,
+                        lastPublishedLineupVersion INTEGER
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS entity_sync_versions (
+                        localTeamId TEXT NOT NULL,
+                        entityType TEXT NOT NULL,
+                        entityId TEXT NOT NULL,
+                        serverVersion INTEGER NOT NULL,
+                        syncedPayloadHash TEXT NOT NULL,
+                        PRIMARY KEY (localTeamId, entityType, entityId)
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_entity_sync_versions_localTeamId ON entity_sync_versions(localTeamId)")
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS pending_mutations (
+                        mutationId TEXT NOT NULL PRIMARY KEY,
+                        localTeamId TEXT NOT NULL,
+                        cloudTeamId TEXT NOT NULL,
+                        entityType TEXT NOT NULL,
+                        entityId TEXT NOT NULL,
+                        operation TEXT NOT NULL,
+                        expectedVersion INTEGER NOT NULL,
+                        payloadJson TEXT,
+                        cellJson TEXT,
+                        createdAt INTEGER NOT NULL,
+                        attemptCount INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_pending_mutations_localTeamId ON pending_mutations(localTeamId)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_pending_mutations_localTeamId_entityType_entityId ON pending_mutations(localTeamId, entityType, entityId)")
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS sync_conflicts (
+                        mutationId TEXT NOT NULL PRIMARY KEY,
+                        localTeamId TEXT NOT NULL,
+                        entityType TEXT NOT NULL,
+                        entityId TEXT NOT NULL,
+                        reason TEXT NOT NULL,
+                        expectedVersion INTEGER NOT NULL,
+                        actualVersion INTEGER NOT NULL,
+                        serverEntityJson TEXT,
+                        createdAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_sync_conflicts_localTeamId ON sync_conflicts(localTeamId)")
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS game_controller_leases (
+                        gameId TEXT NOT NULL PRIMARY KEY,
+                        localTeamId TEXT NOT NULL,
+                        deviceId TEXT NOT NULL,
+                        holderName TEXT NOT NULL,
+                        expiresAt INTEGER NOT NULL,
+                        claimedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_game_controller_leases_localTeamId ON game_controller_leases(localTeamId)")
             }
         }
     }

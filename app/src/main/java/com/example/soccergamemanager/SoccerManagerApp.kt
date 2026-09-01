@@ -2,6 +2,9 @@ package com.example.soccergamemanager
 
 import android.app.Application
 import com.example.soccergamemanager.data.AppDatabase
+import com.example.soccergamemanager.data.CloudSyncManager
+import com.example.soccergamemanager.data.CloudSyncWorker
+import com.example.soccergamemanager.data.SecureCredentialStore
 import com.example.soccergamemanager.data.SettingsStore
 import com.example.soccergamemanager.data.SoccerRepository
 
@@ -12,6 +15,7 @@ class SoccerManagerApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        CloudSyncWorker.enqueue(this)
     }
 }
 
@@ -27,4 +31,11 @@ class AppContainer(application: Application) {
         goalDao = database.goalDao(),
     )
     val settingsStore = SettingsStore(application)
+    private val secureCredentialStore = SecureCredentialStore(application)
+    val syncManager = CloudSyncManager(
+        context = application,
+        database = database,
+        settingsStore = settingsStore,
+        credentials = secureCredentialStore,
+    )
 }

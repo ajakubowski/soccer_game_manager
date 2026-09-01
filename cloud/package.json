@@ -1,0 +1,31 @@
+{
+  "name": "soccer-manager-cloud",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "check": "npm run typecheck && npm test && npm run build && wrangler deploy --dry-run",
+    "dev": "npm run build && wrangler dev",
+    "dev:web": "vite --host 0.0.0.0",
+    "deploy": "npm run check && wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "types": "wrangler types worker-configuration.d.ts --include-runtime false"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "@types/node": "^26.4.0",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "typescript": "latest",
+    "vitest": "latest",
+    "wrangler": "latest"
+  }
+}

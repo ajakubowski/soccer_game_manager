@@ -181,6 +181,80 @@ data class GoalEventEntity(
     val createdAt: Long = System.currentTimeMillis(),
 )
 
+@Entity(tableName = "team_sync_state")
+@Serializable
+data class TeamSyncStateEntity(
+    @PrimaryKey val localTeamId: String,
+    val cloudTeamId: String,
+    val lastPulledRevision: Long = 0,
+    val lastSyncAt: Long? = null,
+    val status: String = "PENDING",
+    val pendingCount: Int = 0,
+    val conflictCount: Int = 0,
+    val lastError: String? = null,
+    val lastPublishedLineupVersion: Int? = null,
+)
+
+@Entity(
+    tableName = "entity_sync_versions",
+    primaryKeys = ["localTeamId", "entityType", "entityId"],
+    indices = [Index("localTeamId")],
+)
+data class EntitySyncVersionEntity(
+    val localTeamId: String,
+    val entityType: String,
+    val entityId: String,
+    val serverVersion: Long,
+    val syncedPayloadHash: String,
+)
+
+@Entity(
+    tableName = "pending_mutations",
+    indices = [Index("localTeamId"), Index(value = ["localTeamId", "entityType", "entityId"])],
+)
+data class PendingMutationEntity(
+    @PrimaryKey val mutationId: String,
+    val localTeamId: String,
+    val cloudTeamId: String,
+    val entityType: String,
+    val entityId: String,
+    val operation: String,
+    val expectedVersion: Long,
+    val payloadJson: String?,
+    val cellJson: String? = null,
+    val createdAt: Long = System.currentTimeMillis(),
+    val attemptCount: Int = 0,
+)
+
+@Entity(
+    tableName = "sync_conflicts",
+    indices = [Index("localTeamId")],
+)
+data class SyncConflictEntity(
+    @PrimaryKey val mutationId: String,
+    val localTeamId: String,
+    val entityType: String,
+    val entityId: String,
+    val reason: String,
+    val expectedVersion: Long,
+    val actualVersion: Long,
+    val serverEntityJson: String?,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(
+    tableName = "game_controller_leases",
+    indices = [Index("localTeamId")],
+)
+data class GameControllerLeaseEntity(
+    @PrimaryKey val gameId: String,
+    val localTeamId: String,
+    val deviceId: String,
+    val holderName: String,
+    val expiresAt: Long,
+    val claimedAt: Long,
+)
+
 data class GameDetail(
     val game: GameEntity,
     val players: List<PlayerEntity>,

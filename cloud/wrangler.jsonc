@@ -1,0 +1,43 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "soccer-game-manager-collab",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TEAM_ROOMS",
+        "class_name": "TeamRoom"
+      }
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DIRECTORY_DB",
+      "database_name": "soccer-game-manager-collab-directory",
+      "database_id": "15476e49-546d-472f-8be9-97a664a1f772",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TeamRoom"]
+    }
+  ],
+  "vars": {
+    "ENVIRONMENT": "production",
+    "BOOTSTRAP_CODE_HASH": "40838a82adcdb4c8fb91354cf222adb93892b94739975fac956ff9029dbf4c5e"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

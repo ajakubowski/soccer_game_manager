@@ -8,3 +8,8 @@ captures/
 *.iml
 *.log
 .DS_Store
+cloud/**/node_modules/
+cloud/dist/
+cloud/.wrangler/
+cloud/.dev.vars*
+!cloud/.dev.vars.example

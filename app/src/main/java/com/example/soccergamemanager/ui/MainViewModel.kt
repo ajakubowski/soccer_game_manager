@@ -5,10 +5,14 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.soccergamemanager.data.GameDetail
 import com.example.soccergamemanager.data.GameEntity
+import com.example.soccergamemanager.data.CloudConnectionSettings
+import com.example.soccergamemanager.data.CloudSyncManager
 import com.example.soccergamemanager.data.PlayerEntity
 import com.example.soccergamemanager.data.SeasonEntity
 import com.example.soccergamemanager.data.SettingsStore
 import com.example.soccergamemanager.data.SoccerRepository
+import com.example.soccergamemanager.data.SyncConflictEntity
+import com.example.soccergamemanager.data.TeamSyncStateEntity
 import com.example.soccergamemanager.domain.ExtraPlayerType
 import com.example.soccergamemanager.domain.FieldPosition
 import com.example.soccergamemanager.domain.GameStatus
@@ -26,6 +30,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.ZonedDateTime
@@ -45,6 +50,9 @@ data class AppUiState(
     val clockRunning: Boolean = false,
     val effectiveHalfElapsedSeconds: Int = 0,
     val effectiveRoundElapsedSeconds: Int = 0,
+    val cloudConnection: CloudConnectionSettings? = null,
+    val syncState: TeamSyncStateEntity? = null,
+    val syncConflicts: List<SyncConflictEntity> = emptyList(),
 ) {
     val selectedSeason: SeasonEntity?
         get() = seasons.firstOrNull { it.seasonId == selectedSeasonId }
@@ -60,6 +68,7 @@ enum class OrientationLockMode(val label: String) {
 class MainViewModel(
     private val repository: SoccerRepository,
     private val settingsStore: SettingsStore,
+    private val syncManager: CloudSyncManager,
 ) : ViewModel() {
     private val selectedGameId = MutableStateFlow<String?>(null)
     private val message = MutableStateFlow<String?>(null)
@@ -88,6 +97,18 @@ class MainViewModel(
     private val gameDetailFlow = selectedGameId
         .flatMapLatest { repository.observeGameDetail(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    private val cloudConnectionFlow = selectedSeasonFlow
+        .flatMapLatest { teamId -> teamId?.let(syncManager::observeConnection) ?: flowOf(null) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    private val cloudStateFlow = selectedSeasonFlow
+        .flatMapLatest { teamId -> teamId?.let(syncManager::observeState) ?: flowOf(null) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    private val cloudConflictsFlow = selectedSeasonFlow
+        .flatMapLatest { teamId -> teamId?.let(syncManager::observeConflicts) ?: flowOf(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val cloudUiFlow = combine(cloudConnectionFlow, cloudStateFlow, cloudConflictsFlow) { connection, state, conflicts ->
+        CloudUiSnapshot(connection, state, conflicts)
+    }
     private val seasonUiFlow = combine(
         seasonsFlow,
         selectedSeasonFlow,
@@ -150,7 +171,7 @@ class MainViewModel(
         )
     }
 
-    val uiState: StateFlow<AppUiState> = combine(baseUiFlow, runtimeUiFlow, orientationLockFlow) { base, runtime, orientationLock ->
+    val uiState: StateFlow<AppUiState> = combine(baseUiFlow, runtimeUiFlow, orientationLockFlow, cloudUiFlow) { base, runtime, orientationLock, cloud ->
         AppUiState(
             seasons = base.seasons,
             selectedSeasonId = base.selectedSeasonId,
@@ -170,10 +191,14 @@ class MainViewModel(
             effectiveRoundElapsedSeconds = runtime.roundElapsedOverride
                 ?: base.selectedGameDetail?.game?.elapsedSecondsInRound
                 ?: 0,
+            cloudConnection = cloud.connection,
+            syncState = cloud.state,
+            syncConflicts = cloud.conflicts,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, AppUiState())
 
     init {
+        syncManager.scheduleSync()
         viewModelScope.launch {
             repository.seedDemoSeasonIfEmpty()
         }
@@ -310,6 +335,72 @@ class MainViewModel(
             report.value = null
             refreshMetrics()
             message.value = "Backup imported."
+        }
+    }
+
+    fun pairCloudTeam(serviceUrl: String, pairingCode: String, deviceName: String) {
+        val teamId = selectedSeasonFlow.value ?: return
+        launchTask {
+            syncManager.pairTeam(teamId, serviceUrl, pairingCode, deviceName)
+            message.value = "Tablet connected and initial synchronization completed."
+        }
+    }
+
+    fun downloadCloudTeam(serviceUrl: String, pairingCode: String, deviceName: String) {
+        launchTask {
+            val teamId = syncManager.downloadCloudTeam(serviceUrl, pairingCode, deviceName)
+            settingsStore.setSelectedSeasonId(teamId)
+            message.value = "Cloud team and roster downloaded. This tablet is ready to sync."
+        }
+    }
+
+    fun syncNow() {
+        val teamId = selectedSeasonFlow.value ?: return
+        launchTask {
+            syncManager.syncTeam(teamId)
+            message.value = "Cloud synchronization complete."
+        }
+    }
+
+    fun disconnectCloud() {
+        val teamId = selectedSeasonFlow.value ?: return
+        launchTask {
+            syncManager.disconnect(teamId)
+            message.value = "Tablet disconnected from the cloud team. Local data was kept."
+        }
+    }
+
+    fun publishLineup() {
+        val teamId = selectedSeasonFlow.value ?: return
+        val detail = uiState.value.selectedGameDetail ?: return
+        launchTask {
+            val response = syncManager.publishLineup(teamId, detail)
+            message.value = "Lineup version ${response.publishedVersion} published."
+        }
+    }
+
+    fun downloadForMatch() {
+        val teamId = selectedSeasonFlow.value ?: return
+        val game = uiState.value.selectedGameDetail?.game ?: return
+        launchTask {
+            val lease = syncManager.downloadForMatch(teamId, game)
+            message.value = "This tablet controls the match until ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(lease.expiresAt))}."
+        }
+    }
+
+    fun keepLocalConflict(mutationId: String) {
+        val teamId = selectedSeasonFlow.value ?: return
+        launchTask {
+            syncManager.keepLocalConflict(teamId, mutationId)
+            message.value = "Local change kept and synchronized."
+        }
+    }
+
+    fun useCloudConflict(mutationId: String) {
+        val teamId = selectedSeasonFlow.value ?: return
+        launchTask {
+            syncManager.useCloudConflict(teamId, mutationId)
+            message.value = "Cloud change applied."
         }
     }
 
@@ -517,6 +608,16 @@ class MainViewModel(
         }
     }
 
+    fun clearExtraLineupCell(halfNumber: Int, roundIndex: Int, position: FieldPosition) {
+        val gameId = selectedGameId.value ?: return
+        launchTask {
+            repository.clearExtraLineupCell(gameId, halfNumber, roundIndex, position)
+            refreshReport()
+            refreshMetrics()
+            message.value = "Extra player slot cleared."
+        }
+    }
+
     fun removeExtraLineupSlot(slotId: String) {
         val gameId = selectedGameId.value ?: return
         launchTask {
@@ -714,6 +815,7 @@ class MainViewModel(
     private fun launchTask(block: suspend () -> Unit) {
         viewModelScope.launch {
             runCatching { block() }
+                .onSuccess { syncManager.scheduleSync() }
                 .onFailure { throwable ->
                     message.value = throwable.message ?: "Something went wrong."
                 }
@@ -761,12 +863,19 @@ private data class ClockUiSnapshot(
     val roundElapsedOverride: Int?,
 )
 
+private data class CloudUiSnapshot(
+    val connection: CloudConnectionSettings?,
+    val state: TeamSyncStateEntity?,
+    val conflicts: List<SyncConflictEntity>,
+)
+
 class MainViewModelFactory(
     private val repository: SoccerRepository,
     private val settingsStore: SettingsStore,
+    private val syncManager: CloudSyncManager,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        return MainViewModel(repository, settingsStore) as T
+        return MainViewModel(repository, settingsStore, syncManager) as T
     }
 }

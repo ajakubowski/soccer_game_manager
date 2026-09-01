@@ -646,14 +646,45 @@ class SoccerRepository(
         val startRound = rounds.minOrNull() ?: roundIndex
         val endRound = rounds.maxOrNull() ?: roundIndex
         val slots = game.extraLineupSlots()
-        val updatedSlots = slots + ExtraLineupSlot(
-            slotId = UUID.randomUUID().toString(),
-            type = type,
-            halfNumber = halfNumber,
-            startRound = startRound,
-            endRound = endRound,
+        var updatedSlots = slots.upsertExtraSlot(
+            ExtraLineupSlot(
+                slotId = UUID.randomUUID().toString(),
+                type = type,
+                halfNumber = halfNumber,
+                startRound = startRound,
+                endRound = endRound,
+            ),
         )
+        if (game.status == GameStatus.LIVE && halfNumber == 1 && template.halfCount >= 2) {
+            updatedSlots = updatedSlots.upsertExtraSlot(
+                ExtraLineupSlot(
+                    slotId = UUID.randomUUID().toString(),
+                    type = type,
+                    halfNumber = 2,
+                    startRound = 1,
+                    endRound = template.roundsPerHalf,
+                ),
+            )
+        }
         gameDao.updateGame(game.copy(extraLineupSlotsJson = updatedSlots.toExtraLineupSlotsJson()))
+    }
+
+    suspend fun clearExtraLineupCell(
+        gameId: String,
+        halfNumber: Int,
+        roundIndex: Int,
+        position: FieldPosition,
+    ) {
+        val game = gameDao.getGame(gameId) ?: return
+        val hasExtraSlot = game.extraLineupSlots().any { it.position == position && it.appliesTo(halfNumber, roundIndex) }
+        if (!hasExtraSlot) return
+        assignmentDao.deletePositionRange(
+            gameId = gameId,
+            halfNumber = halfNumber,
+            position = position,
+            startRound = roundIndex,
+            endRound = roundIndex,
+        )
     }
 
     suspend fun removeExtraLineupSlot(gameId: String, slotId: String) {
@@ -1121,6 +1152,31 @@ class SoccerRepository(
         } else {
             position.group
         }
+
+    private fun List<ExtraLineupSlot>.upsertExtraSlot(newSlot: ExtraLineupSlot): List<ExtraLineupSlot> {
+        val existing = firstOrNull {
+            it.type == newSlot.type &&
+                it.halfNumber == newSlot.halfNumber &&
+                rangesOverlap(it.startRound, it.endRound, newSlot.startRound, newSlot.endRound)
+        }
+        return if (existing == null) {
+            this + newSlot
+        } else {
+            map { slot ->
+                if (slot.slotId == existing.slotId) {
+                    slot.copy(
+                        startRound = minOf(slot.startRound, newSlot.startRound),
+                        endRound = maxOf(slot.endRound, newSlot.endRound),
+                    )
+                } else {
+                    slot
+                }
+            }
+        }
+    }
+
+    private fun rangesOverlap(firstStart: Int, firstEnd: Int, secondStart: Int, secondEnd: Int): Boolean =
+        firstStart <= secondEnd && secondStart <= firstEnd
 
     private fun determinePreferredPositions(
         assignments: List<AssignmentEntity>,

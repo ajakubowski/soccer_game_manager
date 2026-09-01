@@ -60,6 +60,9 @@ interface PlayerDao {
 
     @Update
     suspend fun updatePlayer(player: PlayerEntity)
+
+    @Query("DELETE FROM players WHERE playerId = :playerId")
+    suspend fun deleteById(playerId: String)
 }
 
 @Dao
@@ -90,6 +93,9 @@ interface GameDao {
 
     @Delete
     suspend fun deleteGame(game: GameEntity)
+
+    @Query("DELETE FROM games WHERE gameId = :gameId")
+    suspend fun deleteById(gameId: String)
 }
 
 @Dao
@@ -105,6 +111,9 @@ interface AvailabilityDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(items: List<PlayerAvailabilityEntity>)
+
+    @Query("DELETE FROM player_availability WHERE gameId = :gameId AND playerId = :playerId")
+    suspend fun deleteById(gameId: String, playerId: String)
 }
 
 @Dao
@@ -151,6 +160,9 @@ interface AssignmentDao {
 
     @Update
     suspend fun updateAssignments(items: List<AssignmentEntity>)
+
+    @Query("DELETE FROM assignments WHERE assignmentId = :assignmentId")
+    suspend fun deleteById(assignmentId: String)
 
     @Query(
         """
@@ -199,6 +211,9 @@ interface GoalDao {
     @Delete
     suspend fun deleteGoal(goal: GoalEventEntity)
 
+    @Query("DELETE FROM goal_events WHERE goalEventId = :goalEventId")
+    suspend fun deleteById(goalEventId: String)
+
     @Query(
         """
         SELECT goal_events.* FROM goal_events
@@ -207,4 +222,79 @@ interface GoalDao {
         """,
     )
     suspend fun getFinalizedGoalsBySeason(seasonId: String): List<GoalEventEntity>
+}
+
+@Dao
+interface SyncDao {
+    @Query("SELECT * FROM team_sync_state WHERE localTeamId = :localTeamId LIMIT 1")
+    fun observeState(localTeamId: String): Flow<TeamSyncStateEntity?>
+
+    @Query("SELECT * FROM team_sync_state WHERE localTeamId = :localTeamId LIMIT 1")
+    suspend fun getState(localTeamId: String): TeamSyncStateEntity?
+
+    @Query("SELECT * FROM team_sync_state")
+    suspend fun getAllStates(): List<TeamSyncStateEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertState(state: TeamSyncStateEntity)
+
+    @Query("DELETE FROM team_sync_state WHERE localTeamId = :localTeamId")
+    suspend fun deleteState(localTeamId: String)
+
+    @Query("SELECT * FROM entity_sync_versions WHERE localTeamId = :localTeamId")
+    suspend fun getVersions(localTeamId: String): List<EntitySyncVersionEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertVersions(versions: List<EntitySyncVersionEntity>)
+
+    @Query("DELETE FROM entity_sync_versions WHERE localTeamId = :localTeamId AND entityType = :entityType AND entityId = :entityId")
+    suspend fun deleteVersion(localTeamId: String, entityType: String, entityId: String)
+
+    @Query("DELETE FROM entity_sync_versions WHERE localTeamId = :localTeamId")
+    suspend fun deleteVersionsByTeam(localTeamId: String)
+
+    @Query("SELECT * FROM pending_mutations WHERE localTeamId = :localTeamId ORDER BY createdAt")
+    suspend fun getPending(localTeamId: String): List<PendingMutationEntity>
+
+    @Query("SELECT * FROM pending_mutations WHERE mutationId = :mutationId LIMIT 1")
+    suspend fun getPendingById(mutationId: String): PendingMutationEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPending(mutations: List<PendingMutationEntity>)
+
+    @Query("DELETE FROM pending_mutations WHERE mutationId IN (:mutationIds)")
+    suspend fun deletePending(mutationIds: List<String>)
+
+    @Query("DELETE FROM pending_mutations WHERE localTeamId = :localTeamId")
+    suspend fun deletePendingByTeam(localTeamId: String)
+
+    @Query("DELETE FROM pending_mutations WHERE localTeamId = :localTeamId AND entityType = :entityType AND entityId = :entityId")
+    suspend fun deletePendingForEntity(localTeamId: String, entityType: String, entityId: String)
+
+    @Query("SELECT * FROM sync_conflicts WHERE localTeamId = :localTeamId ORDER BY createdAt DESC")
+    suspend fun getConflicts(localTeamId: String): List<SyncConflictEntity>
+
+    @Query("SELECT * FROM sync_conflicts WHERE localTeamId = :localTeamId ORDER BY createdAt DESC")
+    fun observeConflicts(localTeamId: String): Flow<List<SyncConflictEntity>>
+
+    @Query("SELECT * FROM sync_conflicts WHERE mutationId = :mutationId LIMIT 1")
+    suspend fun getConflict(mutationId: String): SyncConflictEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertConflicts(conflicts: List<SyncConflictEntity>)
+
+    @Query("DELETE FROM sync_conflicts WHERE mutationId = :mutationId")
+    suspend fun deleteConflict(mutationId: String)
+
+    @Query("DELETE FROM sync_conflicts WHERE localTeamId = :localTeamId")
+    suspend fun deleteConflictsByTeam(localTeamId: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertControllerLease(lease: GameControllerLeaseEntity)
+
+    @Query("SELECT * FROM game_controller_leases WHERE gameId = :gameId LIMIT 1")
+    suspend fun getControllerLease(gameId: String): GameControllerLeaseEntity?
+
+    @Query("DELETE FROM game_controller_leases WHERE localTeamId = :localTeamId")
+    suspend fun deleteControllerLeasesByTeam(localTeamId: String)
 }

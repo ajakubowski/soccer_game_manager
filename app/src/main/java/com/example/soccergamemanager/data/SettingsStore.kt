@@ -8,6 +8,14 @@ import com.example.soccergamemanager.ui.OrientationLockMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
+data class CloudConnectionSettings(
+    val localTeamId: String,
+    val serviceUrl: String,
+    val cloudTeamId: String,
+    val deviceId: String,
+    val deviceName: String,
+)
+
 private val Context.dataStore by preferencesDataStore(name = "soccer_manager_settings")
 
 class SettingsStore(private val context: Context) {
@@ -37,6 +45,36 @@ class SettingsStore(private val context: Context) {
     suspend fun setOrientationLockMode(mode: OrientationLockMode) {
         context.dataStore.edit { preferences ->
             preferences[orientationLockKey] = mode.name
+        }
+    }
+
+    fun cloudConnection(localTeamId: String): Flow<CloudConnectionSettings?> = context.dataStore.data.map { preferences ->
+        val serviceUrl = preferences[stringPreferencesKey("cloud_${localTeamId}_service_url")]
+        val cloudTeamId = preferences[stringPreferencesKey("cloud_${localTeamId}_team_id")]
+        val deviceId = preferences[stringPreferencesKey("cloud_${localTeamId}_device_id")]
+        val deviceName = preferences[stringPreferencesKey("cloud_${localTeamId}_device_name")]
+        if (serviceUrl == null || cloudTeamId == null || deviceId == null || deviceName == null) {
+            null
+        } else {
+            CloudConnectionSettings(localTeamId, serviceUrl, cloudTeamId, deviceId, deviceName)
+        }
+    }
+
+    suspend fun saveCloudConnection(settings: CloudConnectionSettings) {
+        context.dataStore.edit { preferences ->
+            preferences[stringPreferencesKey("cloud_${settings.localTeamId}_service_url")] = settings.serviceUrl
+            preferences[stringPreferencesKey("cloud_${settings.localTeamId}_team_id")] = settings.cloudTeamId
+            preferences[stringPreferencesKey("cloud_${settings.localTeamId}_device_id")] = settings.deviceId
+            preferences[stringPreferencesKey("cloud_${settings.localTeamId}_device_name")] = settings.deviceName
+        }
+    }
+
+    suspend fun clearCloudConnection(localTeamId: String) {
+        context.dataStore.edit { preferences ->
+            preferences.remove(stringPreferencesKey("cloud_${localTeamId}_service_url"))
+            preferences.remove(stringPreferencesKey("cloud_${localTeamId}_team_id"))
+            preferences.remove(stringPreferencesKey("cloud_${localTeamId}_device_id"))
+            preferences.remove(stringPreferencesKey("cloud_${localTeamId}_device_name"))
         }
     }
 }

@@ -19,6 +19,7 @@ class MainActivity : ComponentActivity() {
         MainViewModelFactory(
             repository = (application as SoccerManagerApp).container.repository,
             settingsStore = (application as SoccerManagerApp).container.settingsStore,
+            syncManager = (application as SoccerManagerApp).container.syncManager,
         )
     }
 

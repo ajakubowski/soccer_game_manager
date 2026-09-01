@@ -141,6 +141,7 @@ data class GameTemplateConfig(
     val halfDurationMinutes: Int = 25,
     val substitutionWindowMinutes: Int = 4,
     val substitutionEventsPerHalf: Int = 3,
+    val plannedRoundsPerHalf: Int? = null,
     val nextSubAlertSeconds: Int = 60,
     val formationType: FormationType = FormationType.CLASSIC_U9,
     val positions: List<FieldPosition> = DEFAULT_POSITIONS,
@@ -153,6 +154,7 @@ data class GameTemplateConfig(
 
     val roundsPerHalf: Int
         get() {
+            plannedRoundsPerHalf?.takeIf { it > 0 }?.let { return it }
             val minutesPerRound = substitutionWindowMinutes.coerceAtLeast(1)
             val estimatedRounds = (halfDurationMinutes.coerceAtLeast(1) + minutesPerRound - 1) / minutesPerRound
             return estimatedRounds + 1
