@@ -191,7 +191,7 @@ class CloudSyncManager(
         }.getOrThrow()
     }
 
-    suspend fun publishLineup(localTeamId: String, detail: GameDetail): PublishedLineupResponse {
+    suspend fun publishLineup(localTeamId: String, detail: GameDetail, lineupName: String?): PublishedLineupResponse {
         syncTeam(localTeamId)
         val connection = settingsStore.cloudConnection(localTeamId).first() ?: error("Team is not connected.")
         val token = credentials.deviceToken(localTeamId) ?: error("Device credential is missing.")
@@ -207,7 +207,11 @@ class CloudSyncManager(
             connection,
             token,
             detail.game.gameId,
-            PublishLineupRequest(state.lastPulledRevision, appJson.encodeToJsonElement(PublishedLineupPayload.serializer(), payload)),
+            PublishLineupRequest(
+                expectedTeamRevision = state.lastPulledRevision,
+                payload = appJson.encodeToJsonElement(PublishedLineupPayload.serializer(), payload),
+                lineupName = lineupName?.trim()?.ifBlank { null },
+            ),
         )
         syncDao.upsertState(state.copy(lastPublishedLineupVersion = response.publishedVersion, lastSyncAt = System.currentTimeMillis()))
         return response

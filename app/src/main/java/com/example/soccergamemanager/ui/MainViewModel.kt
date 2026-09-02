@@ -370,12 +370,14 @@ class MainViewModel(
         }
     }
 
-    fun publishLineup() {
+    fun publishLineup(lineupName: String?) {
         val teamId = selectedSeasonFlow.value ?: return
         val detail = uiState.value.selectedGameDetail ?: return
         launchTask {
-            val response = syncManager.publishLineup(teamId, detail)
-            message.value = "Lineup version ${response.publishedVersion} published."
+            val response = syncManager.publishLineup(teamId, detail, lineupName)
+            val label = response.lineupName?.let { " ($it)" }.orEmpty()
+            val device = response.publishedFromDeviceName.ifBlank { "this tablet" }
+            message.value = "Lineup version ${response.publishedVersion}$label published from $device."
         }
     }
 

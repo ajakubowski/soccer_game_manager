@@ -42,10 +42,10 @@ export const cloudApi = {
     method: "POST",
     body: JSON.stringify({ commands }),
   }),
-  publish: (teamId: string, gameId: string, expectedTeamRevision: number, payload: Record<string, unknown>) =>
+  publish: (teamId: string, gameId: string, expectedTeamRevision: number, payload: Record<string, unknown>, lineupName?: string) =>
     api<PublishedLineupSnapshot>(`/api/teams/${teamId}/games/${gameId}/lineup/publish`, {
       method: "POST",
-      body: JSON.stringify({ expectedTeamRevision, payload }),
+      body: JSON.stringify({ expectedTeamRevision, payload, lineupName: lineupName?.trim() || undefined }),
     }),
   replaceLineup: (
     teamId: string,

@@ -14,6 +14,8 @@ interface Actor {
   role: MemberRole;
   teamId?: string;
   deviceId?: string;
+  userId?: string;
+  deviceName?: string;
 }
 
 interface MembershipRow {
@@ -28,6 +30,7 @@ interface DeviceRow {
   team_id: string;
   name: string;
   token_hash: string;
+  created_by: string;
   revoked_at: number | null;
 }
 
@@ -141,8 +144,14 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
 
   const publishMatch = action.match(/^games\/([^/]+)\/lineup\/publish$/);
   if (publishMatch && request.method === "POST") {
-    const body = await readJson<{ expectedTeamRevision: number; payload: Record<string, unknown> }>(request);
-    return json(await room.publishLineup(decodeURIComponent(publishMatch[1]), body.expectedTeamRevision, body.payload, teamActor));
+    const body = await readJson<{ expectedTeamRevision: number; payload: Record<string, unknown>; lineupName?: string }>(request);
+    return json(await room.publishLineup(
+      decodeURIComponent(publishMatch[1]),
+      body.expectedTeamRevision,
+      body.payload,
+      body.lineupName,
+      teamActor,
+    ));
   }
   const replaceLineupMatch = action.match(/^games\/([^/]+)\/lineup\/replace$/);
   if (replaceLineupMatch && request.method === "POST") {
@@ -182,7 +191,7 @@ async function authenticate(request: Request, env: Env): Promise<Actor> {
   if (authorization?.startsWith("Bearer ")) {
     const tokenHash = await sha256(authorization.slice(7));
     const device = await env.DIRECTORY_DB.prepare(
-      "SELECT device_id, team_id, name, token_hash, revoked_at FROM devices WHERE token_hash = ?",
+      "SELECT device_id, team_id, name, token_hash, created_by, revoked_at FROM devices WHERE token_hash = ?",
     ).bind(tokenHash).first<DeviceRow>();
     if (!device || device.revoked_at) throw new Error("UNAUTHORIZED:Device token");
     await env.DIRECTORY_DB.prepare("UPDATE devices SET last_seen_at = ? WHERE device_id = ?")
@@ -193,6 +202,8 @@ async function authenticate(request: Request, env: Env): Promise<Actor> {
       role: "COACH",
       teamId: device.team_id,
       deviceId: device.device_id,
+      userId: device.created_by,
+      deviceName: device.name,
     };
   }
   const identity = await authenticateBrowser(request, env.DIRECTORY_DB);

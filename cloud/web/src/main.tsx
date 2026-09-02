@@ -117,11 +117,21 @@ function TeamApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
       </main>
       {conflict && <ConflictDialog
         conflict={conflict.conflict}
-        onUseCloud={() => { setConflict(null); void refresh(); }}
-        onKeepMine={() => {
-          const retry = { ...conflict.command, mutationId: crypto.randomUUID(), expectedVersion: conflict.conflict.actualVersion };
+        subject={conflictSubject(conflict.conflict, snapshot)}
+        onUseCloud={async () => {
+          const subject = conflictSubject(conflict.conflict, snapshot);
           setConflict(null);
-          void mutate([retry]);
+          await refresh();
+          setMessage(`Cloud version kept for ${subject}.`);
+        }}
+        onKeepMine={async () => {
+          const activeConflict = conflict;
+          const retry = { ...conflict.command, mutationId: crypto.randomUUID(), expectedVersion: conflict.conflict.actualVersion };
+          const result = await mutate([retry]);
+          if (!result?.conflicts.length) {
+            setConflict(current => current?.conflict.mutationId === activeConflict.conflict.mutationId ? null : current);
+            setMessage(`Web change saved for ${conflictSubject(activeConflict.conflict, snapshot)}.`);
+          }
         }}
       />}
       {creatingTeam && <CreateTeamDialog
@@ -323,7 +333,6 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
   const [gameId, setGameId] = useState(games[0]?.entityId ?? "");
   const assignments = entities(snapshot, "assignment").filter(entity => stringValue(entity.payload?.gameId) === gameId);
   const game = games.find(entity => entity.entityId === gameId);
-  const template = parseJsonObject(stringValue(game?.payload?.templateJson));
   const availabilityEntities = entities(snapshot, "availability").filter(entity => stringValue(entity.payload?.gameId) === gameId);
   const [formationType, setFormationType] = useState<WebFormationType>("CLASSIC_U9");
   const [halfDuration, setHalfDuration] = useState(25);
@@ -336,6 +345,7 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
   const [picker, setPicker] = useState<{ half: number; round: number; position: string } | null>(null);
   const [armedPlayerId, setArmedPlayerId] = useState("");
   const [publishNeedsReview, setPublishNeedsReview] = useState(false);
+  const [lineupName, setLineupName] = useState("");
   const latestPublished = snapshot.publishedLineups.filter(item => item.gameId === gameId).at(-1);
   const gameStatus = stringValue(game?.payload?.status);
   const editable = gameStatus === "PLANNED" || gameStatus === "PREGAME";
@@ -455,6 +465,13 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
     if (!game || !editable) return;
     if (assignments.length && !regenerate) return;
     if (assignments.length && !confirmed && !window.confirm("Generate a fresh lineup? This replaces the current draft but does not change published versions.")) return;
+    const latest = await cloudApi.snapshot(teamId);
+    const latestGame = entities(latest, "game").find(item => item.entityId === gameId);
+    if (!latestGame || !["PLANNED", "PREGAME"].includes(stringValue(latestGame.payload?.status))) {
+      await onRefresh();
+      onMessage("This game changed and can no longer be regenerated. Review the refreshed game status.");
+      return;
+    }
     const webPlayers: WebLineupPlayer[] = players.map(player => ({
       playerId: player.entityId,
       name: stringValue(player.payload?.name),
@@ -469,40 +486,20 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
       substitutionWindowMinutes: rotationMinutes,
       plannedRoundsPerHalf: plannedRounds,
       manualLocks,
-      historyByPlayer: lineupHistory(snapshot, gameId),
-      variationSeed: snapshot.teamRevision + (regenerate ? 1 : 0),
+      historyByPlayer: lineupHistory(latest, gameId),
+      variationSeed: latest.teamRevision + (regenerate ? 1 : 0),
     });
     if (!result.assignments.length) {
       onMessage(result.warnings.join(" ") || "Not enough available players to generate a lineup.");
-      return;
-    }
-    const availabilityCommands: MutationCommand[] = [];
-    for (const player of webPlayers) {
-      const existing = availabilityEntities.find(entity => stringValue(entity.payload?.playerId) === player.playerId);
-      availabilityCommands.push(command("availability", `${gameId}:${player.playerId}`, existing?.version ?? 0, {
-        gameId,
-        playerId: player.playerId,
-        isAvailable: player.availableFirstHalf || player.availableSecondHalf,
-        isInjured: false,
-        availableFirstHalf: player.availableFirstHalf,
-        availableSecondHalf: player.availableSecondHalf,
-        injuredAssignmentId: null,
-        injuredPosition: null,
-        injuredHalfNumber: null,
-        injuredRoundIndex: null,
-      }));
-    }
-    const availabilityResult = await onMutate(availabilityCommands);
-    if (availabilityResult?.conflicts.length) {
-      onMessage("Player availability changed on another device. Review the latest availability before regenerating.");
       return;
     }
     const generatedAssignments = result.assignments.map(generated => {
       const assignmentId = crypto.randomUUID();
       return { assignmentId, gameId, ...generated };
     });
+    const latestTemplate = parseJsonObject(stringValue(latestGame.payload?.templateJson));
     const updatedTemplate = {
-      ...template,
+      ...latestTemplate,
       halfDurationMinutes: halfDuration,
       substitutionWindowMinutes: rotationMinutes,
       plannedRoundsPerHalf: plannedRounds,
@@ -511,7 +508,7 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
       positions: [...FORMATIONS[selectedFormation].positions],
     };
     const updatedGame = {
-      ...(game.payload ?? {}),
+      ...(latestGame.payload ?? {}),
       status: "PREGAME",
       templateJson: JSON.stringify(updatedTemplate),
       manualGroupLocksJson: JSON.stringify(manualLocks),
@@ -520,7 +517,7 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
     const replacement = await cloudApi.replaceLineup(
       teamId,
       gameId,
-      game.version,
+      latestGame.version,
       updatedGame,
       generatedAssignments,
       crypto.randomUUID(),
@@ -562,8 +559,9 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
         game: game?.payload,
         assignments: assignments.map(item => item.payload),
         publishedFromRevision: snapshot.teamRevision,
-      });
+      }, lineupName);
       setPublishNeedsReview(false);
+      setLineupName("");
       onMessage(`Lineup version ${published.publishedVersion} published.`);
     } catch (error) {
       if (String(error).includes("STALE_DRAFT")) {
@@ -590,8 +588,9 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
         game: latestGame.payload,
         assignments: latestAssignments.map(item => item.payload),
         publishedFromRevision: latest.teamRevision,
-      });
+      }, lineupName);
       setPublishNeedsReview(false);
+      setLineupName("");
       await onRefresh();
       onMessage(`Latest cloud lineup published as version ${published.publishedVersion}.`);
     } catch (error) {
@@ -615,11 +614,12 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
       <div><span className="eyebrow">Shared lineup draft</span><h2>Planner</h2></div>
       <div className="button-row">
         <select value={gameId} onChange={event => setGameId(event.target.value)}>{games.map(item => <option key={item.entityId} value={item.entityId}>{stringValue(item.payload?.opponent)}</option>)}</select>
+        <input aria-label="Lineup name" placeholder="Lineup name (optional)" value={lineupName} onChange={event => setLineupName(event.target.value)} />
         {publishNeedsReview && <button onClick={() => void publishLatestCloudDraft()}>Publish latest cloud draft</button>}
         <button className="primary" disabled={!assignments.length || !editable} onClick={() => void publish()}>Publish lineup</button>
       </div>
     </div>
-    <p className="muted">{latestPublished ? `Published v${latestPublished.publishedVersion} by ${latestPublished.publishedBy}` : "Not published yet"} · Changes are checked cell-by-cell before saving.</p>
+    <p className="muted">{latestPublished ? `${latestPublished.lineupName || `Lineup v${latestPublished.publishedVersion}`} · Published by ${latestPublished.publishedByUser} from ${latestPublished.publishedFromDeviceName} · ${new Date(latestPublished.publishedAt).toLocaleString()}` : "Not published yet"} · Changes are checked cell-by-cell before saving.</p>
     <div className="planner-command-deck">
       <section className="lineup-setup-block"><div className="panel-heading"><div><span className="eyebrow">Match shape</span><h3>Formation</h3></div></div>
         <div className="formation-options">{(Object.keys(FORMATIONS) as WebFormationType[]).map(type => <button key={type} className={`formation-option ${formationType === type ? "selected" : ""}`} onClick={() => {
@@ -900,13 +900,56 @@ function keeperPlanningInsight(snapshot: TeamSnapshot, currentGameId: string, pl
   return { recent, counts: players.map(player => ({ name: stringValue(player.payload?.name), count: counts.get(player.entityId) ?? 0 })).sort((left, right) => left.count - right.count || left.name.localeCompare(right.name)) };
 }
 
-function ConflictDialog({ conflict, onKeepMine, onUseCloud }: { conflict: SyncConflict; onKeepMine: () => void; onUseCloud: () => void }) {
+function ConflictDialog({ conflict, subject, onKeepMine, onUseCloud }: {
+  conflict: SyncConflict;
+  subject: string;
+  onKeepMine: () => Promise<void>;
+  onUseCloud: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const resolve = async (action: () => Promise<void>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await action();
+    } catch (reason) {
+      setError(readableError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
   return <div className="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="conflict-title">
-    <section className="dialog-card"><span className="eyebrow">Safe collaboration</span><h2 id="conflict-title">This lineup item changed elsewhere</h2>
-      <p>Your edit began at version {conflict.expectedVersion}, but the cloud is now at version {conflict.actualVersion}. Nothing was overwritten.</p>
-      <div className="button-row"><button className="primary" onClick={onKeepMine}>Keep mine</button><button onClick={onUseCloud}>Use theirs</button></div>
+    <section className="dialog-card"><span className="eyebrow">Safe collaboration</span><h2 id="conflict-title">Choose which version to keep</h2>
+      <p>Both the web app and another device changed <strong>{subject}</strong>.</p>
+      <p><strong>Keep web change</strong> overwrites only this cloud item. <strong>Use cloud change</strong> discards the web edit and refreshes the planner.</p>
+      <p className="muted">Web version {conflict.expectedVersion} · Current cloud version {conflict.actualVersion}</p>
+      {error && <p className="planner-warning">{error}</p>}
+      <div className="button-row"><button className="primary" disabled={busy} onClick={() => void resolve(onKeepMine)}>{busy ? "Resolving..." : "Keep web change"}</button><button disabled={busy} onClick={() => void resolve(onUseCloud)}>Use cloud change</button></div>
     </section>
   </div>;
+}
+
+function conflictSubject(conflict: SyncConflict, snapshot: TeamSnapshot | null): string {
+  const snapshotEntities = (type: string) => snapshot ? entities(snapshot, type) : [];
+  const playerName = (playerId: string) => stringValue(
+    snapshotEntities("player").find(player => player.entityId === playerId)?.payload?.name,
+  );
+  if (conflict.entityType === "availability") {
+    const playerId = conflict.entityId.split(":").at(-1) ?? "";
+    return playerName(playerId) ? `${playerName(playerId)}'s availability` : "this player's availability";
+  }
+  if (conflict.entityType === "assignment") {
+    const assignment = conflict.serverEntity ?? snapshotEntities("assignment").find(item => item.entityId === conflict.entityId);
+    const position = stringValue(assignment?.payload?.position);
+    return position ? `the ${label(position)} lineup assignment` : "this lineup assignment";
+  }
+  if (conflict.entityType === "game") {
+    const game = conflict.serverEntity ?? snapshotEntities("game").find(item => item.entityId === conflict.entityId);
+    const opponent = stringValue(game?.payload?.opponent);
+    return opponent ? `the game against ${opponent}` : "these game settings";
+  }
+  return `this ${label(conflict.entityType)} item`;
 }
 
 function LiveObserver({ snapshot }: { snapshot: TeamSnapshot }) {
@@ -931,7 +974,7 @@ function History({ snapshot }: { snapshot: TeamSnapshot }) {
 
 function Report({ snapshot }: { snapshot: TeamSnapshot }) {
   return <section className="panel"><div className="panel-heading"><div><span className="eyebrow">Published history</span><h2>Lineup reports</h2></div><button onClick={() => window.print()}>Print</button></div>
-    {snapshot.publishedLineups.length ? snapshot.publishedLineups.map(report => <article className="report-row" key={`${report.gameId}:${report.publishedVersion}`}><strong>Game {report.gameId.slice(0, 8)} · Lineup v{report.publishedVersion}</strong><span>{report.publishedBy} · {new Date(report.publishedAt).toLocaleString()}</span></article>) : <Empty text="Published lineups will appear here." />}
+    {snapshot.publishedLineups.length ? snapshot.publishedLineups.map(report => <article className="report-row" key={`${report.gameId}:${report.publishedVersion}`}><strong>{report.lineupName || `Lineup v${report.publishedVersion}`} · Game {report.gameId.slice(0, 8)}</strong><span>v{report.publishedVersion} · {report.publishedByUser} · {report.publishedFromDeviceName} · {new Date(report.publishedAt).toLocaleString()}</span></article>) : <Empty text="Published lineups will appear here." />}
   </section>;
 }
 

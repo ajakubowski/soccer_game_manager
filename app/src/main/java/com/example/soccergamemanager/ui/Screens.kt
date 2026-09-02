@@ -325,6 +325,7 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                         onClearExtraLineupCell = viewModel::clearExtraLineupCell,
                         onRemoveExtraLineupSlot = viewModel::removeExtraLineupSlot,
                         onPublishLineup = viewModel::publishLineup,
+                        onSyncNow = viewModel::syncNow,
                         onDownloadForMatch = viewModel::downloadForMatch,
                         onStartOrPause = viewModel::startOrPauseClock,
                         onAdvanceRound = viewModel::advanceRound,
@@ -1174,7 +1175,8 @@ private fun GameHubScreen(
     onAddExtraLineupSlot: (ExtraPlayerType, Int, Int, LineupEditScope) -> Unit,
     onClearExtraLineupCell: (Int, Int, FieldPosition) -> Unit,
     onRemoveExtraLineupSlot: (String) -> Unit,
-    onPublishLineup: () -> Unit,
+    onPublishLineup: (String?) -> Unit,
+    onSyncNow: () -> Unit,
     onDownloadForMatch: () -> Unit,
     onStartOrPause: () -> Unit,
     onAdvanceRound: () -> Unit,
@@ -1242,6 +1244,7 @@ private fun GameHubScreen(
                     onClearExtraLineupCell = onClearExtraLineupCell,
                     onRemoveExtraLineupSlot = onRemoveExtraLineupSlot,
                     onPublishLineup = onPublishLineup,
+                    onSyncNow = onSyncNow,
                     onDownloadForMatch = onDownloadForMatch,
                     showHeader = false,
                     onGoToLive = { selectedTab = GameHubTab.LIVE },
@@ -1536,7 +1539,8 @@ private fun PlannerScreen(
     onAddExtraLineupSlot: (ExtraPlayerType, Int, Int, LineupEditScope) -> Unit,
     onClearExtraLineupCell: (Int, Int, FieldPosition) -> Unit,
     onRemoveExtraLineupSlot: (String) -> Unit,
-    onPublishLineup: () -> Unit,
+    onPublishLineup: (String?) -> Unit,
+    onSyncNow: () -> Unit,
     onDownloadForMatch: () -> Unit,
     showHeader: Boolean = true,
     onGoToLive: (() -> Unit)? = null,
@@ -1572,6 +1576,40 @@ private fun PlannerScreen(
     }
     var pendingFormationType by rememberSaveable(detail.game.gameId) {
         mutableStateOf<String?>(null)
+    }
+    var showPublishDialog by rememberSaveable(detail.game.gameId) { mutableStateOf(false) }
+    var lineupName by rememberSaveable(detail.game.gameId) { mutableStateOf("") }
+
+    if (showPublishDialog) {
+        AlertDialog(
+            onDismissRequest = { showPublishDialog = false },
+            title = { Text("Publish lineup") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Create an immutable cloud version of the current lineup. The coach, device, version number, and timestamp are recorded automatically.")
+                    OutlinedTextField(
+                        value = lineupName,
+                        onValueChange = { lineupName = it },
+                        label = { Text("Lineup name (optional)") },
+                        placeholder = { Text("Example: Game-day final") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onPublishLineup(lineupName.trim().ifBlank { null })
+                        lineupName = ""
+                        showPublishDialog = false
+                    },
+                ) { Text("Publish lineup") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPublishDialog = false }) { Text("Cancel") }
+            },
+        )
     }
 
     pendingFormationType?.let { pendingTypeName ->
@@ -1897,12 +1935,12 @@ private fun PlannerScreen(
         }
         item {
             Card {
-                Row(
+                FlowRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Button(
                         onClick = onGenerateAssignments,
@@ -1920,7 +1958,13 @@ private fun PlannerScreen(
                     }
                     if (uiState.cloudConnection != null) {
                         OutlinedButton(
-                            onClick = onPublishLineup,
+                            onClick = onSyncNow,
+                            enabled = uiState.syncState?.status != "SYNCING",
+                        ) {
+                            Text("Sync with cloud")
+                        }
+                        OutlinedButton(
+                            onClick = { showPublishDialog = true },
                             enabled = detail.assignments.isNotEmpty() && !readOnly && uiState.syncState?.status != "SYNCING",
                         ) {
                             Text("Publish lineup")
@@ -1934,6 +1978,12 @@ private fun PlannerScreen(
                     }
                 }
                 if (uiState.cloudConnection != null) {
+                    Text(
+                        "Sync with cloud exchanges the latest planning changes. Download for match syncs again, then makes this tablet the live match controller.",
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     Text(
                         when (uiState.syncState?.status) {
                             "SYNCED" -> "Cloud is current${uiState.syncState.lastPublishedLineupVersion?.let { " · Published v$it" }.orEmpty()}"

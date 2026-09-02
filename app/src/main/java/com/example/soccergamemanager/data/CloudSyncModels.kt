@@ -82,6 +82,7 @@ data class ChangesResponse(
 data class PublishLineupRequest(
     val expectedTeamRevision: Long,
     val payload: JsonElement,
+    val lineupName: String? = null,
 )
 
 @Serializable
@@ -89,7 +90,11 @@ data class PublishedLineupResponse(
     val gameId: String,
     val publishedVersion: Int,
     val teamRevision: Long,
+    val lineupName: String? = null,
     val publishedBy: String,
+    val publishedByUser: String = "",
+    val publishedFromDeviceId: String = "",
+    val publishedFromDeviceName: String = "",
     val publishedAt: Long,
 )
 

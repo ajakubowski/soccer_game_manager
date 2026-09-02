@@ -32,4 +32,29 @@ describe("lineup regeneration API", () => {
       assignments: [{ assignmentId: "a1" }],
     });
   });
+
+  it("includes an optional lineup name when publishing", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      gameId: "game-1",
+      publishedVersion: 3,
+      teamRevision: 12,
+      payload: {},
+      lineupName: "Game-day final",
+      publishedBy: "Coach",
+      publishedByUser: "coach@example.com",
+      publishedFromDeviceId: "web",
+      publishedFromDeviceName: "Web app",
+      publishedAt: 123,
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await cloudApi.publish("team-1", "game-1", 12, { assignments: [] }, " Game-day final ");
+
+    const [path, init] = fetchMock.mock.calls[0];
+    expect(path).toBe("/api/teams/team-1/games/game-1/lineup/publish");
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      expectedTeamRevision: 12,
+      lineupName: "Game-day final",
+    });
+  });
 });

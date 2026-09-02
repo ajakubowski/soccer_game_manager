@@ -64,7 +64,11 @@ export interface PublishedLineupSnapshot {
   publishedVersion: number;
   teamRevision: number;
   payload: Record<string, unknown>;
+  lineupName: string | null;
   publishedBy: string;
+  publishedByUser: string;
+  publishedFromDeviceId: string;
+  publishedFromDeviceName: string;
   publishedAt: number;
 }
 

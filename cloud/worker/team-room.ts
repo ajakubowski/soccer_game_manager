@@ -17,6 +17,8 @@ interface Actor {
   role: "OWNER" | "COACH" | "VIEWER";
   teamId?: string;
   deviceId?: string;
+  userId?: string;
+  deviceName?: string;
 }
 
 interface StoredEntityRow extends Record<string, SqlStorageValue> {
@@ -34,7 +36,11 @@ interface PublishedRow extends Record<string, SqlStorageValue> {
   published_version: number;
   team_revision: number;
   payload: string;
+  lineup_name: string | null;
   published_by: string;
+  published_by_user: string | null;
+  published_from_device_id: string | null;
+  published_from_device_name: string | null;
   published_at: number;
 }
 
@@ -95,7 +101,11 @@ export class TeamRoom extends DurableObject<Env> {
           published_version INTEGER NOT NULL,
           team_revision INTEGER NOT NULL,
           payload TEXT NOT NULL,
+          lineup_name TEXT,
           published_by TEXT NOT NULL,
+          published_by_user TEXT,
+          published_from_device_id TEXT,
+          published_from_device_name TEXT,
           published_at INTEGER NOT NULL,
           PRIMARY KEY (game_id, published_version)
         );
@@ -111,6 +121,22 @@ export class TeamRoom extends DurableObject<Env> {
       this.ctx.storage.sql.exec(
         "INSERT OR IGNORE INTO metadata (key, value) VALUES ('team_revision', '0')",
       );
+      const publishedColumns = new Set(
+        this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(published_lineups)")
+          .toArray()
+          .map(column => column.name),
+      );
+      const missingPublishedColumns = [
+        ["lineup_name", "TEXT"],
+        ["published_by_user", "TEXT"],
+        ["published_from_device_id", "TEXT"],
+        ["published_from_device_name", "TEXT"],
+      ] as const;
+      missingPublishedColumns.forEach(([name, type]) => {
+        if (!publishedColumns.has(name)) {
+          this.ctx.storage.sql.exec(`ALTER TABLE published_lineups ADD COLUMN ${name} ${type}`);
+        }
+      });
     });
   }
 
@@ -334,6 +360,7 @@ export class TeamRoom extends DurableObject<Env> {
     gameId: string,
     expectedTeamRevision: number,
     payload: Record<string, unknown>,
+    lineupName: string | undefined,
     actor: Actor,
   ): Promise<PublishedLineupSnapshot> {
     if (actor.role === "VIEWER") throw new Error("Viewer access is read-only");
@@ -350,18 +377,27 @@ export class TeamRoom extends DurableObject<Env> {
       publishedVersion: previous.version + 1,
       teamRevision: currentRevision,
       payload,
+      lineupName: lineupName?.trim() || null,
       publishedBy: actor.displayName,
+      publishedByUser: actor.userId ?? actor.id,
+      publishedFromDeviceId: actor.deviceId ?? "web",
+      publishedFromDeviceName: actor.deviceName ?? "Web app",
       publishedAt: Date.now(),
     };
     this.ctx.storage.sql.exec(
       `INSERT INTO published_lineups
-       (game_id, published_version, team_revision, payload, published_by, published_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       (game_id, published_version, team_revision, payload, lineup_name, published_by,
+        published_by_user, published_from_device_id, published_from_device_name, published_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       gameId,
       published.publishedVersion,
       published.teamRevision,
       JSON.stringify(payload),
+      published.lineupName,
       published.publishedBy,
+      published.publishedByUser,
+      published.publishedFromDeviceId,
+      published.publishedFromDeviceName,
       published.publishedAt,
     );
     this.broadcast({ type: "published", teamRevision: currentRevision, published });
@@ -634,7 +670,11 @@ function mapPublished(row: PublishedRow): PublishedLineupSnapshot {
     publishedVersion: row.published_version,
     teamRevision: row.team_revision,
     payload: JSON.parse(row.payload) as Record<string, unknown>,
+    lineupName: row.lineup_name ?? null,
     publishedBy: row.published_by,
+    publishedByUser: row.published_by_user ?? row.published_by,
+    publishedFromDeviceId: row.published_from_device_id ?? "legacy",
+    publishedFromDeviceName: row.published_from_device_name ?? "Unknown device",
     publishedAt: row.published_at,
   };
 }
