@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { AuthSessionResponse, AuthUser, CloudEntity, MemberRole, MutationCommand, MutationResult, PresenceMember, SyncConflict, TeamSnapshot, TeamSummary } from "../../shared/contracts";
 import { FORMATIONS, generateWebLineup, type WebFormationType, type WebLineupPlayer, type WebManualLock, type WebPlayerHistory } from "../../shared/lineup-generator";
 import { api, cloudApi, collaborationSocket } from "./api";
+import { buildManualInviteMessage } from "./invite-message";
 import { buildPrintReportModel, PrintableGameReport } from "./print-report";
 import "./styles.css";
 
@@ -115,7 +116,7 @@ function TeamApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
         {snapshot && tab === "Live" && <LiveObserver snapshot={snapshot} />}
         {snapshot && tab === "History & Stats" && <History snapshot={snapshot} />}
         {snapshot && tab === "Report" && <Report snapshot={snapshot} teamName={activeTeam?.name ?? "Team"} initialGameId={reportGameId} />}
-        {teamId && tab === "Access" && <AccessPanel teamId={teamId} onMessage={setMessage} />}
+        {teamId && tab === "Access" && <AccessPanel teamId={teamId} teamName={activeTeam?.name ?? "Team"} user={user} onMessage={setMessage} />}
       </main>
       {conflict && <ConflictDialog
         conflict={conflict.conflict}
@@ -1065,17 +1066,90 @@ function Report({ snapshot, teamName, initialGameId }: { snapshot: TeamSnapshot;
   </div>;
 }
 
-function AccessPanel({ teamId, onMessage }: { teamId: string; onMessage: (message: string) => void }) {
+async function copyText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Clipboard access was unavailable");
+}
+
+function AccessPanel({ teamId, teamName, user, onMessage }: { teamId: string; teamName: string; user: AuthUser; onMessage: (message: string) => void }) {
   const [members, setMembers] = useState<Array<{ email: string; role: MemberRole }>>([]);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<MemberRole>("COACH");
   const [pairingCode, setPairingCode] = useState("");
+  const [inviting, setInviting] = useState<"email" | "copy" | null>(null);
   const refresh = () => cloudApi.members(teamId).then(result => setMembers(result.members));
   useEffect(() => { void refresh(); }, [teamId]);
+
+  const copyInvite = async (invitedEmail: string, invitedRole: MemberRole) => {
+    const message = buildManualInviteMessage({
+      appUrl: window.location.origin,
+      invitedEmail,
+      inviterName: user.displayName,
+      role: invitedRole,
+      teamName,
+    });
+    await copyText(message);
+  };
+
+  const invite = async (sendEmail: boolean) => {
+    const invitedEmail = email.trim().toLowerCase();
+    setInviting(sendEmail ? "email" : "copy");
+    try {
+      const result = await cloudApi.invite(teamId, invitedEmail, role, sendEmail);
+      let copied = true;
+      if (!sendEmail) {
+        try {
+          await copyInvite(invitedEmail, role);
+        } catch {
+          copied = false;
+        }
+      }
+      setEmail("");
+      await refresh();
+      onMessage(sendEmail
+        ? result.emailSent
+          ? `Invitation email sent to ${invitedEmail}. You can also copy it from the member list.`
+          : result.deliveryMessage ?? `Access added for ${invitedEmail}, but the email was not sent.`
+        : copied
+          ? `Access added for ${invitedEmail}. The invitation message and link are copied.`
+          : `Access added for ${invitedEmail}, but the browser blocked copying. Use “Copy invite” beside the member to try again.`);
+    } catch (error) {
+      onMessage(`Invitation was not added: ${readableError(error)}`);
+    } finally {
+      setInviting(null);
+    }
+  };
+
   return <div className="two-column">
-    <section className="panel"><h2>Coach access</h2><p className="muted">Invite the exact email the coach will use to activate a Soccer Manager account.</p>
-      <div className="form-row"><input type="email" placeholder="coach@example.com" value={email} onChange={event => setEmail(event.target.value)} /><select value={role} onChange={event => setRole(event.target.value as MemberRole)}><option>COACH</option><option>VIEWER</option><option>OWNER</option></select><button className="primary" onClick={async () => { await cloudApi.invite(teamId, email, role); setEmail(""); await refresh(); }}>Invite</button></div>
-      {members.map(member => <article className="history-row" key={member.email}><strong>{member.email}</strong><span>{member.role}</span></article>)}
+    <section className="panel"><h2>Coach access</h2><p className="muted">Invite the exact email the coach will use to activate a Soccer Manager account. Send through the app, or copy a ready-to-send invitation for your own email.</p>
+      <div className="form-row access-invite-row">
+        <input type="email" aria-label="Coach email" placeholder="coach@example.com" value={email} onChange={event => setEmail(event.target.value)} />
+        <select aria-label="Coach role" value={role} onChange={event => setRole(event.target.value as MemberRole)}><option value="COACH">Coach</option><option value="VIEWER">Viewer</option><option value="OWNER">Owner</option></select>
+        <button className="primary" disabled={inviting !== null || !email.trim()} onClick={() => void invite(true)}>{inviting === "email" ? "Sending..." : "Invite & email"}</button>
+        <button disabled={inviting !== null || !email.trim()} onClick={() => void invite(false)}>{inviting === "copy" ? "Copying..." : "Add access & copy"}</button>
+      </div>
+      <div className="manual-invite-note"><strong>Prefer your own email?</strong><span>“Add access & copy” puts the full invitation and app link on your clipboard without sending an automated email.</span></div>
+      <div className="member-list">
+        {members.map(member => <article className="history-row member-row" key={member.email}><div><strong>{member.email}</strong><span>{member.role}</span></div><button onClick={async () => {
+          try {
+            await copyInvite(member.email, member.role);
+            onMessage(`Invitation for ${member.email} copied.`);
+          } catch (error) {
+            onMessage(`Invitation could not be copied: ${readableError(error)}`);
+          }
+        }}>Copy invite</button></article>)}
+      </div>
     </section>
     <section className="panel"><h2>Download to Android tablet</h2><p className="muted">After building the team and roster here, generate a one-time code and choose “Download cloud team” in Android Setup. The code expires after 10 minutes.</p>
       <button className="primary" onClick={async () => { const result = await cloudApi.pairing(teamId); setPairingCode(result.code); onMessage("Pairing code created."); }}>Generate code</button>

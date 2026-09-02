@@ -9,6 +9,7 @@ The cloud workspace contains the collaborative React web app and the Cloudflare 
 - D1 stores the small cross-team directory: password accounts, sessions, memberships, paired devices, and one-time pairing codes.
 - The web app authenticates users with username/email and password. Passwords use salted PBKDF2 hashes; browser sessions use hashed random tokens in Secure, HttpOnly, SameSite cookies.
 - Android uses a revocable device token obtained with a one-time pairing code. Device routes remain independently bearer-authenticated.
+- Resend's free transactional-email tier sends branded team invitations from `team@soccergrowthhub.com` with replies directed to the inviting coach; invitation delivery never blocks granting team access or changes the Cloudflare Workers plan.
 - The web Planner uses a direct TypeScript port of the Android lineup rules engine, including full-half keepers, fixed within-half position groups, cross-half group changes when possible, season fairness, exact-position continuity, manual group/goalie/Center Defense locks, half-specific availability, custom rotation timing, row-aware benches, extra-player slots, and drag/tap edits.
 
 ## Local Development
@@ -62,11 +63,20 @@ npm run deploy
 
 5. Visit the deployed site and create the first username/email/password account using the one-time owner setup code generated during deployment. This is the bootstrap owner account.
 
-6. Create the team and roster directly in `Team & Roster`, then open `Access` and invite each coach's exact email address and role.
+6. Create a free [Resend](https://resend.com/) account, verify `soccergrowthhub.com`, and add the DNS records Resend provides to the domain in Cloudflare. The free tier currently supports 3,000 transactional emails per month and 100 per day.
 
-7. Each invited coach selects `Activate invite` and registers the invited email with a unique username and password. Uninvited registration is rejected after the bootstrap account exists.
+7. Create a sending-only Resend API key and store it as an encrypted Worker secret. Never put the key in `wrangler.jsonc` or Git:
 
-8. Generate an Android pairing code from the `Access` tab only when the web team is ready to download to the tablet.
+```bash
+cd /Users/Shared/soccer_game_management/cloud
+npx wrangler secret put RESEND_API_KEY
+```
+
+8. Create the team and roster directly in `Roster & Schedule`, then open `Access` and invite each coach's exact email address and role. The app sends a branded invitation from `team@soccergrowthhub.com` naming the inviter, team, role, and account-activation link. Replies go to the coach who sent the invitation.
+
+9. Each invited coach selects `Activate invite` and registers the invited email with a unique username and password. Uninvited registration is rejected after the bootstrap account exists.
+
+10. Generate an Android pairing code from the `Access` tab only when the web team is ready to download to the tablet.
 
 ## Android Pairing
 
@@ -80,7 +90,7 @@ Choose `Download cloud team`. Android creates an internal JSON backup, downloads
 
 ## Operational Notes
 
-- Do not commit `.dev.vars`, device tokens, session cookies, passwords, or Cloudflare API tokens.
+- Do not commit `.dev.vars`, device tokens, session cookies, passwords, Resend API keys, or Cloudflare API tokens.
 - Keep the one-time owner setup code private until the first account is registered. Only its SHA-256 hash is stored in `wrangler.jsonc`.
 - Use passwords of at least 10 characters. Eight failed login attempts within 15 minutes temporarily throttle that username/email.
 - A stale lineup cell produces an explicit conflict; it is never overwritten silently.

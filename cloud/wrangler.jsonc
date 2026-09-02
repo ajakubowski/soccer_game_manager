@@ -41,7 +41,9 @@
   ],
   "vars": {
     "ENVIRONMENT": "production",
-    "BOOTSTRAP_CODE_HASH": "40838a82adcdb4c8fb91354cf222adb93892b94739975fac956ff9029dbf4c5e"
+    "BOOTSTRAP_CODE_HASH": "40838a82adcdb4c8fb91354cf222adb93892b94739975fac956ff9029dbf4c5e",
+    "APP_BASE_URL": "https://manager.soccergrowthhub.com/",
+    "INVITE_FROM_ADDRESS": "team@soccergrowthhub.com"
   },
   "observability": {
     "enabled": true,

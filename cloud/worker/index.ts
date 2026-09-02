@@ -6,6 +6,7 @@ import {
   logoutAccount,
   registerAccount,
 } from "./auth";
+import { sendTeamInviteEmail } from "./invite-email";
 export { TeamRoom } from "./team-room";
 
 interface Actor {
@@ -315,7 +316,7 @@ async function listMembers(env: Env, actor: Actor, teamId: string): Promise<Resp
 
 async function upsertMember(request: Request, env: Env, actor: Actor, teamId: string): Promise<Response> {
   if (actor.role !== "OWNER") throw new Error("FORBIDDEN:Owner access required");
-  const body = await readJson<{ email: string; role: MemberRole }>(request);
+  const body = await readJson<{ email: string; role: MemberRole; sendEmail?: boolean }>(request);
   const email = body.email.trim().toLowerCase();
   if (!email.includes("@") || !["OWNER", "COACH", "VIEWER"].includes(body.role)) {
     throw new Error("FORBIDDEN:Invalid member");
@@ -328,7 +329,38 @@ async function upsertMember(request: Request, env: Env, actor: Actor, teamId: st
       "INSERT OR REPLACE INTO memberships (team_id, email, role, created_at) VALUES (?, ?, ?, ?)",
     ).bind(teamId, email, body.role, now),
   ]);
-  return json({ ok: true });
+  const team = await env.DIRECTORY_DB.prepare("SELECT name FROM teams WHERE team_id = ?")
+    .bind(teamId).first<{ name: string }>();
+  if (!team) throw new Error("NOT_FOUND:Team");
+
+  if (body.sendEmail === false) {
+    return json({ ok: true, emailSent: false, manualShare: true });
+  }
+
+  try {
+    const delivery = await sendTeamInviteEmail(env.RESEND_API_KEY, env.INVITE_FROM_ADDRESS, {
+      appUrl: env.APP_BASE_URL,
+      invitedEmail: email,
+      inviterEmail: actor.id,
+      inviterName: actor.displayName,
+      role: body.role,
+      teamName: team.name,
+    });
+    return json({ ok: true, emailSent: true, messageId: delivery.messageId });
+  } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      event: "team_invite_email_failed",
+      teamId,
+      recipientDomain: email.split("@")[1],
+      error: String(error),
+    }));
+    return json({
+      ok: true,
+      emailSent: false,
+      deliveryMessage: "Access was added, but the invitation email could not be sent. Share the app link directly or try inviting again.",
+    });
+  }
 }
 
 async function removeMember(env: Env, actor: Actor, teamId: string, email: string): Promise<Response> {

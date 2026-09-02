@@ -68,9 +68,15 @@ export const cloudApi = {
     body: JSON.stringify({}),
   }),
   members: (teamId: string) => api<{ members: Array<{ email: string; role: MemberRole }>; actorRole: MemberRole }>(`/api/teams/${teamId}/members`),
-  invite: (teamId: string, email: string, role: MemberRole) => api<{ ok: boolean }>(`/api/teams/${teamId}/members`, {
+  invite: (teamId: string, email: string, role: MemberRole, sendEmail = true) => api<{
+    ok: boolean;
+    emailSent: boolean;
+    manualShare?: boolean;
+    deliveryMessage?: string;
+    messageId?: string;
+  }>(`/api/teams/${teamId}/members`, {
     method: "POST",
-    body: JSON.stringify({ email, role }),
+    body: JSON.stringify({ email, role, sendEmail }),
   }),
 };
 
