@@ -8,6 +8,16 @@ import com.example.soccergamemanager.ui.OrientationLockMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
+const val DEFAULT_CLOUD_SERVICE_URL = "https://manager.soccergrowthhub.com"
+private const val LEGACY_CLOUD_SERVICE_URL = "https://soccer-game-manager-collab.jakubowski-andy.workers.dev"
+
+internal fun currentCloudServiceUrl(serviceUrl: String): String =
+    if (serviceUrl.trim().trimEnd('/') == LEGACY_CLOUD_SERVICE_URL) {
+        DEFAULT_CLOUD_SERVICE_URL
+    } else {
+        serviceUrl
+    }
+
 data class CloudConnectionSettings(
     val localTeamId: String,
     val serviceUrl: String,
@@ -56,7 +66,13 @@ class SettingsStore(private val context: Context) {
         if (serviceUrl == null || cloudTeamId == null || deviceId == null || deviceName == null) {
             null
         } else {
-            CloudConnectionSettings(localTeamId, serviceUrl, cloudTeamId, deviceId, deviceName)
+            CloudConnectionSettings(
+                localTeamId = localTeamId,
+                serviceUrl = currentCloudServiceUrl(serviceUrl),
+                cloudTeamId = cloudTeamId,
+                deviceId = deviceId,
+                deviceName = deviceName,
+            )
         }
     }
 

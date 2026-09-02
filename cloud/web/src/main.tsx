@@ -335,6 +335,7 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
   const [selectedRounds, setSelectedRounds] = useState<Record<number, number>>({ 1: 1, 2: 1 });
   const [picker, setPicker] = useState<{ half: number; round: number; position: string } | null>(null);
   const [armedPlayerId, setArmedPlayerId] = useState("");
+  const [publishNeedsReview, setPublishNeedsReview] = useState(false);
   const latestPublished = snapshot.publishedLineups.filter(item => item.gameId === gameId).at(-1);
   const gameStatus = stringValue(game?.payload?.status);
   const editable = gameStatus === "PLANNED" || gameStatus === "PREGAME";
@@ -367,6 +368,8 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
     setActiveHalf(1);
     setArmedPlayerId("");
   }, [gameId, game?.version, availableSignature]);
+
+  useEffect(() => setPublishNeedsReview(false), [gameId]);
 
   useEffect(() => {
     if (!games.some(item => item.entityId === gameId) && games[0]) setGameId(games[0].entityId);
@@ -560,9 +563,44 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
         assignments: assignments.map(item => item.payload),
         publishedFromRevision: snapshot.teamRevision,
       });
+      setPublishNeedsReview(false);
       onMessage(`Lineup version ${published.publishedVersion} published.`);
     } catch (error) {
-      onMessage(String(error).includes("STALE_DRAFT") ? "New cloud changes arrived. Review them before publishing." : String(error));
+      if (String(error).includes("STALE_DRAFT")) {
+        setPublishNeedsReview(true);
+        await onRefresh();
+        onMessage("New cloud changes arrived. Review the refreshed draft, then publish the latest cloud version.");
+      } else {
+        onMessage(String(error));
+      }
+    }
+  };
+
+  const publishLatestCloudDraft = async () => {
+    try {
+      const latest = await cloudApi.snapshot(teamId);
+      const latestGame = entities(latest, "game").find(item => item.entityId === gameId);
+      const latestAssignments = entities(latest, "assignment")
+        .filter(item => stringValue(item.payload?.gameId) === gameId);
+      if (!latestGame || !latestAssignments.length) {
+        onMessage("The latest cloud draft is incomplete. Refresh the planner before publishing.");
+        return;
+      }
+      const published = await cloudApi.publish(teamId, gameId, latest.teamRevision, {
+        game: latestGame.payload,
+        assignments: latestAssignments.map(item => item.payload),
+        publishedFromRevision: latest.teamRevision,
+      });
+      setPublishNeedsReview(false);
+      await onRefresh();
+      onMessage(`Latest cloud lineup published as version ${published.publishedVersion}.`);
+    } catch (error) {
+      if (String(error).includes("STALE_DRAFT")) {
+        await onRefresh();
+        onMessage("Another change arrived before publishing. Review the refreshed draft and try again.");
+      } else {
+        onMessage(String(error));
+      }
     }
   };
 
@@ -577,6 +615,7 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
       <div><span className="eyebrow">Shared lineup draft</span><h2>Planner</h2></div>
       <div className="button-row">
         <select value={gameId} onChange={event => setGameId(event.target.value)}>{games.map(item => <option key={item.entityId} value={item.entityId}>{stringValue(item.payload?.opponent)}</option>)}</select>
+        {publishNeedsReview && <button onClick={() => void publishLatestCloudDraft()}>Publish latest cloud draft</button>}
         <button className="primary" disabled={!assignments.length || !editable} onClick={() => void publish()}>Publish lineup</button>
       </div>
     </div>
@@ -619,7 +658,7 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
 
     {(firstHalfAvailable < 7 || secondHalfAvailable < 7) && <p className="planner-warning">Each half needs at least seven available players. Current availability: Half 1 {firstHalfAvailable}, Half 2 {secondHalfAvailable}.</p>}
     {!assignments.length ? <div className="generate-bar"><div><strong>Ready to build both halves?</strong><span>The app will honor the locks, create {plannedRounds} rotations per half, and keep players in their group within each half.</span></div><button className="primary" disabled={!editable || players.length < 7 || firstHalfAvailable < 7 || secondHalfAvailable < 7} onClick={() => void generate()}>Generate lineup draft</button></div> : <>
-      <div className="planner-action-bar"><div><strong>{plannedRounds} rotations · {rotationMinutes} minute target</strong><span>{stringValue(game?.payload?.plannerNotes) || "Lineup checks are clear."}</span></div><div className="button-row"><button disabled={!editable} onClick={() => void generate(true)}>Regenerate fresh lineup</button><button className="primary" disabled={!editable} onClick={() => void publish()}>Publish lineup</button></div></div>
+      <div className="planner-action-bar"><div><strong>{plannedRounds} rotations · {rotationMinutes} minute target</strong><span>{publishNeedsReview ? "The cloud draft refreshed. Review it before choosing Publish latest cloud draft." : stringValue(game?.payload?.plannerNotes) || "Lineup checks are clear."}</span></div><div className="button-row"><button disabled={!editable} onClick={() => void generate(true)}>Regenerate fresh lineup</button>{publishNeedsReview && <button onClick={() => void publishLatestCloudDraft()}>Publish latest cloud draft</button>}<button className="primary" disabled={!editable} onClick={() => void publish()}>Publish lineup</button></div></div>
       <nav className="half-switcher" aria-label="Choose lineup half">{([1, 2] as const).map(half => <button key={half} className={activeHalf === half ? "active" : ""} onClick={() => { setActiveHalf(half); setArmedPlayerId(""); }}><span>Half {half}</span><small>{half === 1 ? firstHalfAvailable : secondHalfAvailable} available · R{selectedRounds[half]}</small></button>)}</nav>
       <LineupHalfBoard
         half={activeHalf}

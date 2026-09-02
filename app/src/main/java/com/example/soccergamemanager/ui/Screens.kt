@@ -102,6 +102,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.soccergamemanager.R
 import com.example.soccergamemanager.data.AssignmentEntity
+import com.example.soccergamemanager.data.DEFAULT_CLOUD_SERVICE_URL
 import com.example.soccergamemanager.data.GameDetail
 import com.example.soccergamemanager.data.GameEntity
 import com.example.soccergamemanager.data.GoalEventEntity
@@ -277,6 +278,8 @@ fun SoccerManagerRoot(viewModel: MainViewModel) {
                         onDisconnectCloud = viewModel::disconnectCloud,
                         onKeepLocalConflict = viewModel::keepLocalConflict,
                         onUseCloudConflict = viewModel::useCloudConflict,
+                        onKeepAllTabletConflicts = viewModel::keepAllTabletConflicts,
+                        onUseAllCloudConflicts = viewModel::useAllCloudConflicts,
                     )
                 }
                 composable(Destination.Games.route) {
@@ -376,6 +379,8 @@ private fun SetupScreen(
     onDisconnectCloud: () -> Unit,
     onKeepLocalConflict: (String) -> Unit,
     onUseCloudConflict: (String) -> Unit,
+    onKeepAllTabletConflicts: () -> Unit,
+    onUseAllCloudConflicts: () -> Unit,
 ) {
     val context = LocalContext.current
     var pendingImportJson by rememberSaveable { mutableStateOf<String?>(null) }
@@ -428,11 +433,13 @@ private fun SetupScreen(
     }
     val editingPlayer = uiState.players.firstOrNull { it.playerId == editingPlayerId }
     var cloudServiceUrl by rememberSaveable(uiState.selectedSeasonId) {
-        mutableStateOf("https://soccer-game-manager-collab.jakubowski-andy.workers.dev")
+        mutableStateOf(DEFAULT_CLOUD_SERVICE_URL)
     }
     var pairingCode by rememberSaveable(uiState.selectedSeasonId) { mutableStateOf("") }
     var deviceName by rememberSaveable(uiState.selectedSeasonId) { mutableStateOf("Sideline tablet") }
     var confirmDisconnect by rememberSaveable { mutableStateOf(false) }
+    var confirmKeepAllTabletConflicts by rememberSaveable { mutableStateOf(false) }
+    var confirmUseAllCloudConflicts by rememberSaveable { mutableStateOf(false) }
 
     if (confirmDisconnect) {
         AlertDialog(
@@ -448,6 +455,48 @@ private fun SetupScreen(
                 ) { Text("Disconnect") }
             },
             dismissButton = { TextButton(onClick = { confirmDisconnect = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (confirmUseAllCloudConflicts) {
+        AlertDialog(
+            onDismissRequest = { confirmUseAllCloudConflicts = false },
+            title = { Text("Use cloud versions for all conflicts?") },
+            text = {
+                Text("This replaces only the ${uiState.syncConflicts.size} conflicting item(s) on this tablet with their current cloud versions. Other tablet data is unchanged.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onUseAllCloudConflicts()
+                        confirmUseAllCloudConflicts = false
+                    },
+                ) { Text("Use cloud versions") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmUseAllCloudConflicts = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (confirmKeepAllTabletConflicts) {
+        AlertDialog(
+            onDismissRequest = { confirmKeepAllTabletConflicts = false },
+            title = { Text("Make tablet changes authoritative?") },
+            text = {
+                Text("This retries all ${uiState.syncConflicts.size} conflicting tablet changes against the latest cloud versions. Those cloud items may be overwritten.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onKeepAllTabletConflicts()
+                        confirmKeepAllTabletConflicts = false
+                    },
+                ) { Text("Keep tablet versions") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmKeepAllTabletConflicts = false }) { Text("Cancel") }
+            },
         )
     }
 
@@ -660,6 +709,28 @@ private fun SetupScreen(
                         }
                         if (state?.pendingCount ?: 0 > 0) {
                             Text("${state?.pendingCount} local change(s) are waiting to upload.")
+                        }
+                        if (uiState.syncConflicts.isNotEmpty()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.28f),
+                                shape = MaterialTheme.shapes.medium,
+                            ) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        "Resolve ${uiState.syncConflicts.size} cloud conflict(s)",
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                    Text("Choose which device is authoritative for all conflicting items, or resolve them individually below.")
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = { confirmUseAllCloudConflicts = true }) {
+                                            Text("Use all cloud changes")
+                                        }
+                                        OutlinedButton(onClick = { confirmKeepAllTabletConflicts = true }) {
+                                            Text("Keep all tablet changes")
+                                        }
+                                    }
+                                }
+                            }
                         }
                         uiState.syncConflicts.forEach { conflict ->
                             Surface(

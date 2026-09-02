@@ -26,12 +26,17 @@ describe("web lineup generator", () => {
       expect(keeperAssignments).toHaveLength(result.roundsPerHalf);
       expect(new Set(keeperAssignments.map(item => item.roundIndex)).size).toBe(result.roundsPerHalf);
       const fieldGroupsByPlayer = new Map<string, Set<string>>();
+      const positionsByPlayer = new Map<string, Set<string>>();
       result.assignments.filter(item => item.halfNumber === half && item.position !== "GOALIE").forEach(item => {
         const groups = fieldGroupsByPlayer.get(item.playerId) ?? new Set<string>();
         groups.add(item.positionGroup);
         fieldGroupsByPlayer.set(item.playerId, groups);
+        const positions = positionsByPlayer.get(item.playerId) ?? new Set<string>();
+        positions.add(item.position);
+        positionsByPlayer.set(item.playerId, positions);
       });
       for (const groups of fieldGroupsByPlayer.values()) expect(groups.size).toBe(1);
+      for (const positions of positionsByPlayer.values()) expect(positions.size).toBe(1);
     }
     const firstGroups = new Map(result.assignments.filter(item => item.halfNumber === 1 && item.position !== "GOALIE").map(item => [item.playerId, item.positionGroup]));
     for (const assignment of result.assignments.filter(item => item.halfNumber === 2 && item.position !== "GOALIE")) {
@@ -47,6 +52,74 @@ describe("web lineup generator", () => {
         row.forEach(item => {
           if (previous.has(item.playerId)) expect(item.position).toBe(previous.get(item.playerId));
         });
+        const previousFieldPlayers = new Set(result.assignments
+          .filter(item => item.halfNumber === half && item.roundIndex === round - 1 && item.position !== "GOALIE")
+          .map(item => item.playerId));
+        const currentFieldPlayers = new Set(row.filter(item => item.position !== "GOALIE").map(item => item.playerId));
+        expect([...previousFieldPlayers].filter(playerId => currentFieldPlayers.has(playerId))).toEqual([]);
+      }
+    }
+  });
+
+  it("keeps in-half playing time balanced when group sizes cannot form perfect cohorts", () => {
+    const result = generateWebLineup({
+      players: players(11),
+      formationType: "CLASSIC_U9",
+      halfDurationMinutes: 25,
+      substitutionWindowMinutes: 5,
+    });
+    for (const half of [1, 2]) {
+      for (const group of ["DEFENSE", "LR_MID", "CM_STRIKER"]) {
+        const counts = new Map<string, number>();
+        result.assignments
+          .filter(item => item.halfNumber === half && item.positionGroup === group)
+          .forEach(item => counts.set(item.playerId, (counts.get(item.playerId) ?? 0) + 1));
+        const values = [...counts.values()];
+        expect(Math.max(...values) - Math.min(...values)).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it("rotates the maximum possible players in every position group each round", () => {
+    const result = generateWebLineup({
+      players: players(10),
+      formationType: "ATTACK_BACK_THREE",
+      halfDurationMinutes: 25,
+      substitutionWindowMinutes: 4,
+    });
+    for (const half of [1, 2]) {
+      for (const definition of FORMATIONS.ATTACK_BACK_THREE.groups) {
+        const groupAssignments = result.assignments.filter(item => item.halfNumber === half && item.positionGroup === definition.key);
+        const groupPlayerCount = new Set(groupAssignments.map(item => item.playerId)).size;
+        const unavoidableRepeats = Math.max(0, definition.positions.length * 2 - groupPlayerCount);
+        for (let round = 2; round <= result.roundsPerHalf; round += 1) {
+          const previousAssignments = new Map(groupAssignments.filter(item => item.roundIndex === round - 1).map(item => [item.playerId, item.position]));
+          const currentAssignments = new Map(groupAssignments.filter(item => item.roundIndex === round).map(item => [item.playerId, item.position]));
+          const stayingPlayerIds = [...previousAssignments.keys()].filter(playerId => currentAssignments.has(playerId));
+          expect(stayingPlayerIds).toHaveLength(unavoidableRepeats);
+          for (const playerId of stayingPlayerIds) expect(currentAssignments.get(playerId)).toBe(previousAssignments.get(playerId));
+        }
+      }
+    }
+  });
+
+  it("keeps the unavoidable holdover in place for three-player classic groups", () => {
+    const result = generateWebLineup({
+      players: players(10),
+      formationType: "CLASSIC_U9",
+      halfDurationMinutes: 25,
+      substitutionWindowMinutes: 4,
+    });
+    for (const half of [1, 2]) {
+      for (const definition of FORMATIONS.CLASSIC_U9.groups) {
+        const groupAssignments = result.assignments.filter(item => item.halfNumber === half && item.positionGroup === definition.key);
+        for (let round = 2; round <= result.roundsPerHalf; round += 1) {
+          const previousAssignments = new Map(groupAssignments.filter(item => item.roundIndex === round - 1).map(item => [item.playerId, item.position]));
+          const currentAssignments = new Map(groupAssignments.filter(item => item.roundIndex === round).map(item => [item.playerId, item.position]));
+          const stayingPlayerIds = [...previousAssignments.keys()].filter(playerId => currentAssignments.has(playerId));
+          expect(stayingPlayerIds).toHaveLength(1);
+          expect(currentAssignments.get(stayingPlayerIds[0])).toBe(previousAssignments.get(stayingPlayerIds[0]));
+        }
       }
     }
   });

@@ -380,18 +380,69 @@ class LineupGenerator {
         val slotCounts = players.associate { it.id to 0 }.toMutableMap()
         val positionCounts = mutableMapOf<Pair<String, FieldPosition>, Int>()
         val assignments = mutableListOf<GeneratedAssignment>()
-        var previousAssignmentsByPosition = emptyMap<FieldPosition, String>()
+        // Stable pools create complete substitution cohorts and return players to one position.
+        val positionPools = positions.associateWith { mutableListOf<LineupPlayer>() }.toMutableMap()
+        val positionLockedPlayerIds = lockedPlayerIdsByPosition.values.flatten().toSet()
 
-        for (roundIndex in 1..roundsPerHalf) {
-            val selectedPlayers = players
+        positions.forEach { position ->
+            players
+                .filter { it.id in lockedPlayerIdsByPosition[position].orEmpty() }
                 .sortedWith(
                     compareBy<LineupPlayer>(
-                        { slotCounts[it.id] ?: 0 },
-                        { historyByPlayer[it.id]?.minutesPlayed ?: 0.0 },
-                        { variationRank(variationSeed, "round-${halfNumber}-${roundIndex}-${it.id}") },
+                        { historyByPlayer[it.id]?.positionCounts?.get(position) ?: 0 },
+                        { variationRank(variationSeed, "position-pool-locked-${halfNumber}-${position.name}-${it.id}") },
                         { it.name },
                     ),
                 )
+                .forEach { positionPools.getValue(position) += it }
+        }
+
+        val openPositions = positions.filter { lockedPlayerIdsByPosition[it].isNullOrEmpty() }.ifEmpty { positions }
+        players
+            .filterNot { it.id in positionLockedPlayerIds }
+            .sortedWith(
+                compareBy<LineupPlayer>(
+                    { historyByPlayer[it.id]?.minutesPlayed ?: 0.0 },
+                    { variationRank(variationSeed, "position-pool-player-${halfNumber}-${it.id}") },
+                    { it.name },
+                ),
+            )
+            .forEach { player ->
+                val position = openPositions.minWithOrNull(
+                    compareBy<FieldPosition>(
+                        { positionPools.getValue(it).size },
+                        { historyByPlayer[player.id]?.positionCounts?.get(it) ?: 0 },
+                        { variationRank(variationSeed, "position-pool-${halfNumber}-${it.name}-${player.id}") },
+                        { positions.indexOf(it) },
+                    ),
+                ) ?: openPositions.first()
+                positionPools.getValue(position) += player
+            }
+
+        val preferredPositionByPlayer = positionPools.flatMap { (position, pool) ->
+            pool.map { player -> player.id to position }
+        }.toMap()
+        val rotationPriority = buildList {
+            val depth = positionPools.values.maxOfOrNull { it.size } ?: 0
+            repeat(depth) { poolIndex ->
+                positions.forEach { position ->
+                    positionPools.getValue(position).getOrNull(poolIndex)?.let(::add)
+                }
+            }
+        }.mapIndexed { index, player -> player.id to index }.toMap()
+        var previousAssignmentsByPosition = emptyMap<FieldPosition, String>()
+
+        for (roundIndex in 1..roundsPerHalf) {
+            val playerPriority = compareBy<LineupPlayer>(
+                { slotCounts[it.id] ?: 0 },
+                { rotationPriority[it.id] ?: Int.MAX_VALUE },
+                { historyByPlayer[it.id]?.minutesPlayed ?: 0.0 },
+                { it.name },
+            )
+            val previousPlayerIds = previousAssignmentsByPosition.values.toSet()
+            val benchPlayers = players.filterNot { it.id in previousPlayerIds }.sortedWith(playerPriority)
+            val returningPlayers = players.filter { it.id in previousPlayerIds }.sortedWith(playerPriority)
+            val selectedPlayers = (benchPlayers + returningPlayers)
                 .take(positions.size.coerceAtMost(players.size))
                 .toMutableList()
 
@@ -402,9 +453,10 @@ class LineupGenerator {
                     .filter { it.id in lockedIds }
                     .minWithOrNull(
                         compareBy<LineupPlayer>(
+                            { if (it.id in previousPlayerIds) 1 else 0 },
                             { slotCounts[it.id] ?: 0 },
                             { positionCounts.getOrDefault(it.id to position, 0) },
-                            { variationRank(variationSeed, "locked-position-${halfNumber}-${roundIndex}-${position.name}-${it.id}") },
+                            { rotationPriority[it.id] ?: Int.MAX_VALUE },
                             { it.name },
                         ),
                     ) ?: return@forEach
@@ -416,13 +468,15 @@ class LineupGenerator {
                     }
                     .maxWithOrNull(
                         compareBy<LineupPlayer>(
+                            { if (it.id in previousPlayerIds) 1 else 0 },
                             { slotCounts[it.id] ?: 0 },
-                            { it.name },
+                            { rotationPriority[it.id] ?: Int.MAX_VALUE },
                         ),
                     ) ?: selectedPlayers.maxWithOrNull(
                     compareBy<LineupPlayer>(
+                        { if (it.id in previousPlayerIds) 1 else 0 },
                         { slotCounts[it.id] ?: 0 },
-                        { it.name },
+                        { rotationPriority[it.id] ?: Int.MAX_VALUE },
                     ),
                 )
 
@@ -439,8 +493,6 @@ class LineupGenerator {
             val remainingPlayers = selectedPlayers.toMutableList()
             val currentAssignmentsByPosition = mutableMapOf<FieldPosition, String>()
 
-            // If a player is staying on the field between rounds, keep them in the same exact
-            // position and only use the open positions for the actual subs coming in.
             positions.forEach { position ->
                 val lockedIds = lockedPlayerIdsByPosition[position].orEmpty()
                 if (lockedIds.isEmpty()) return@forEach
@@ -450,7 +502,7 @@ class LineupGenerator {
                         compareBy<LineupPlayer>(
                             { positionCounts.getOrDefault(it.id to position, 0) },
                             { slotCounts[it.id] ?: 0 },
-                            { variationRank(variationSeed, "locked-assignment-${halfNumber}-${roundIndex}-${position.name}-${it.id}") },
+                            { rotationPriority[it.id] ?: Int.MAX_VALUE },
                             { it.name },
                         ),
                     ) ?: return@forEach
@@ -466,6 +518,21 @@ class LineupGenerator {
                 remainingPlayers.remove(stayingPlayer)
             }
 
+            positions.forEach { position ->
+                if (position in currentAssignmentsByPosition) return@forEach
+                val preferredPlayer = remainingPlayers
+                    .filter { preferredPositionByPlayer[it.id] == position }
+                    .minWithOrNull(
+                        compareBy<LineupPlayer>(
+                            { positionCounts.getOrDefault(it.id to position, 0) },
+                            { rotationPriority[it.id] ?: Int.MAX_VALUE },
+                            { it.name },
+                        ),
+                    ) ?: return@forEach
+                currentAssignmentsByPosition[position] = preferredPlayer.id
+                remainingPlayers.remove(preferredPlayer)
+            }
+
             positions
                 .filterNot { it in currentAssignmentsByPosition }
                 .forEach { position ->
@@ -476,7 +543,7 @@ class LineupGenerator {
                                 positionCounts.getOrDefault(it.id to position, 0)
                         },
                         { slotCounts[it.id] ?: 0 },
-                        { variationRank(variationSeed, "position-${halfNumber}-${roundIndex}-${position.name}-${it.id}") },
+                        { rotationPriority[it.id] ?: Int.MAX_VALUE },
                         { it.name },
                     ),
                 ) ?: return@forEach

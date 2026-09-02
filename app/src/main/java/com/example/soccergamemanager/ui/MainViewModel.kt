@@ -404,6 +404,22 @@ class MainViewModel(
         }
     }
 
+    fun keepAllTabletConflicts() {
+        val teamId = selectedSeasonFlow.value ?: return
+        launchTask {
+            syncManager.keepAllLocalConflicts(teamId)
+            message.value = "Tablet changes kept and synchronized."
+        }
+    }
+
+    fun useAllCloudConflicts() {
+        val teamId = selectedSeasonFlow.value ?: return
+        launchTask {
+            syncManager.useAllCloudConflicts(teamId)
+            message.value = "Cloud changes applied and conflicts cleared."
+        }
+    }
+
     fun togglePlayerActive(player: PlayerEntity) {
         launchTask {
             repository.togglePlayerActive(player)

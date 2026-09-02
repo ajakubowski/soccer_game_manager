@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import androidx.room.Upsert
 import com.example.soccergamemanager.domain.FieldPosition
 import kotlinx.coroutines.flow.Flow
 
@@ -28,10 +29,10 @@ interface SeasonDao {
     @Query("SELECT COUNT(*) FROM seasons")
     suspend fun countSeasons(): Int
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertSeason(season: SeasonEntity)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertSeasons(seasons: List<SeasonEntity>)
 
     @Update
@@ -52,10 +53,10 @@ interface PlayerDao {
     @Query("SELECT * FROM players ORDER BY seasonId, name ASC")
     suspend fun getAllPlayers(): List<PlayerEntity>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertPlayer(player: PlayerEntity)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertPlayers(players: List<PlayerEntity>)
 
     @Update
@@ -82,10 +83,10 @@ interface GameDao {
     @Query("SELECT * FROM games WHERE seasonId = :seasonId AND status = 'FINAL'")
     suspend fun getFinalizedGamesBySeason(seasonId: String): List<GameEntity>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertGame(game: GameEntity)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertGames(games: List<GameEntity>)
 
     @Update

@@ -245,6 +245,7 @@ class CloudSyncManager(
             syncDao.deletePending(listOf(mutationId))
             syncDao.deleteConflict(mutationId)
             syncDao.upsertPending(listOf(replacement))
+            refreshSyncCounts(localTeamId)
         }
         syncTeam(localTeamId)
     }
@@ -253,11 +254,86 @@ class CloudSyncManager(
         val conflict = syncDao.getConflict(mutationId) ?: return
         val serverEntity = conflict.serverEntityJson?.let { appJson.decodeFromString<CloudEntityDto>(it) }
         database.withTransaction {
-            if (serverEntity != null) applyRemoteEntity(localTeamId, serverEntity)
+            if (serverEntity != null) applyResolvedCloudEntity(localTeamId, serverEntity)
             syncDao.deletePending(listOf(mutationId))
             syncDao.deleteConflict(mutationId)
+            refreshSyncCounts(localTeamId)
         }
         syncTeam(localTeamId)
+    }
+
+    suspend fun keepAllLocalConflicts(localTeamId: String) {
+        val conflicts = syncDao.getConflicts(localTeamId).associateBy { it.mutationId }
+        if (conflicts.isEmpty()) return
+        val replacements = syncDao.getPending(localTeamId).mapNotNull { pending ->
+            val conflict = conflicts[pending.mutationId] ?: return@mapNotNull null
+            pending.copy(
+                mutationId = UUID.randomUUID().toString(),
+                expectedVersion = conflict.actualVersion,
+                attemptCount = 0,
+                createdAt = System.currentTimeMillis(),
+            )
+        }
+        database.withTransaction {
+            syncDao.deletePending(conflicts.keys.toList())
+            syncDao.deleteConflictsByTeam(localTeamId)
+            if (replacements.isNotEmpty()) syncDao.upsertPending(replacements)
+            refreshSyncCounts(localTeamId)
+        }
+        syncTeam(localTeamId)
+    }
+
+    suspend fun useAllCloudConflicts(localTeamId: String) {
+        val conflicts = syncDao.getConflicts(localTeamId)
+        if (conflicts.isEmpty()) return
+        database.withTransaction {
+            conflicts.forEach { conflict ->
+                conflict.serverEntityJson
+                    ?.let { appJson.decodeFromString<CloudEntityDto>(it) }
+                    ?.let { applyResolvedCloudEntity(localTeamId, it) }
+            }
+            syncDao.deletePending(conflicts.map { it.mutationId })
+            syncDao.deleteConflictsByTeam(localTeamId)
+            refreshSyncCounts(localTeamId)
+        }
+        syncTeam(localTeamId)
+    }
+
+    private suspend fun refreshSyncCounts(localTeamId: String) {
+        val state = syncDao.getState(localTeamId) ?: return
+        val pendingCount = syncDao.getPending(localTeamId).size
+        val conflictCount = syncDao.getConflicts(localTeamId).size
+        syncDao.upsertState(
+            state.copy(
+                status = when {
+                    conflictCount > 0 -> "CONFLICT"
+                    pendingCount > 0 -> "PENDING"
+                    else -> "SYNCED"
+                },
+                pendingCount = pendingCount,
+                conflictCount = conflictCount,
+                lastError = null,
+            ),
+        )
+    }
+
+    private suspend fun applyResolvedCloudEntity(localTeamId: String, entity: CloudEntityDto) {
+        applyRemoteEntity(localTeamId, entity)
+        if (entity.deletedAt != null || entity.payload == null) {
+            syncDao.deleteVersion(localTeamId, entity.entityType, entity.entityId)
+        } else {
+            syncDao.upsertVersions(
+                listOf(
+                    EntitySyncVersionEntity(
+                        localTeamId = localTeamId,
+                        entityType = entity.entityType,
+                        entityId = entity.entityId,
+                        serverVersion = entity.version,
+                        syncedPayloadHash = hash(entity.payload.toString()),
+                    ),
+                ),
+            )
+        }
     }
 
     private suspend fun preparePendingMutations(localTeamId: String, connection: CloudConnectionSettings) {

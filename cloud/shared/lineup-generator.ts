@@ -184,22 +184,72 @@ function generateGroupRounds(input: {
   const output: WebGeneratedAssignment[] = [];
   const appearances = new Map(input.players.map(player => [player.playerId, 0]));
   const positionCounts = new Map<string, number>();
+  // Stable pools create complete substitution cohorts and return players to one position.
+  const positionPools = new Map(input.positions.map(position => [position, [] as WebLineupPlayer[]]));
+  const positionLockedPlayerIds = new Set(Object.values(input.lockedPlayerIdsByPosition).flat());
+
+  for (const position of input.positions) {
+    const lockedIds = input.lockedPlayerIdsByPosition[position] ?? [];
+    const lockedPlayers = input.players
+      .filter(player => lockedIds.includes(player.playerId))
+      .sort((left, right) =>
+        compareNumbers(input.history[left.playerId]?.positionCounts?.[position] ?? 0, input.history[right.playerId]?.positionCounts?.[position] ?? 0) ||
+        compareNumbers(variationRank(input.seed, `position-pool-locked-${input.halfNumber}-${position}-${left.playerId}`), variationRank(input.seed, `position-pool-locked-${input.halfNumber}-${position}-${right.playerId}`)) ||
+        left.name.localeCompare(right.name)
+      );
+    positionPools.set(position, lockedPlayers);
+  }
+
+  const unlockedPositions = input.positions.filter(position => !(input.lockedPlayerIdsByPosition[position]?.length));
+  const openPositions = unlockedPositions.length ? unlockedPositions : input.positions;
+  const remainingPlayers = input.players
+    .filter(player => !positionLockedPlayerIds.has(player.playerId))
+    .sort((left, right) =>
+      compareNumbers(input.history[left.playerId]?.minutesPlayed ?? 0, input.history[right.playerId]?.minutesPlayed ?? 0) ||
+      compareNumbers(variationRank(input.seed, `position-pool-player-${input.halfNumber}-${left.playerId}`), variationRank(input.seed, `position-pool-player-${input.halfNumber}-${right.playerId}`)) ||
+      left.name.localeCompare(right.name)
+    );
+  for (const player of remainingPlayers) {
+    const position = [...openPositions].sort((left, right) =>
+      compareNumbers(positionPools.get(left)?.length ?? 0, positionPools.get(right)?.length ?? 0) ||
+      compareNumbers(input.history[player.playerId]?.positionCounts?.[left] ?? 0, input.history[player.playerId]?.positionCounts?.[right] ?? 0) ||
+      compareNumbers(variationRank(input.seed, `position-pool-${input.halfNumber}-${left}-${player.playerId}`), variationRank(input.seed, `position-pool-${input.halfNumber}-${right}-${player.playerId}`)) ||
+      compareNumbers(input.positions.indexOf(left), input.positions.indexOf(right))
+    )[0];
+    positionPools.get(position)?.push(player);
+  }
+
+  const preferredPositionByPlayer = new Map<string, string>();
+  for (const [position, pool] of positionPools) for (const player of pool) preferredPositionByPlayer.set(player.playerId, position);
+  const rotationOrder: WebLineupPlayer[] = [];
+  const poolDepth = Math.max(0, ...[...positionPools.values()].map(pool => pool.length));
+  for (let poolIndex = 0; poolIndex < poolDepth; poolIndex += 1) {
+    for (const position of input.positions) {
+      const player = positionPools.get(position)?.[poolIndex];
+      if (player) rotationOrder.push(player);
+    }
+  }
+  const rotationPriority = new Map(rotationOrder.map((player, index) => [player.playerId, index]));
   let previous = new Map<string, string>();
 
   for (let roundIndex = 1; roundIndex <= input.roundsPerHalf; roundIndex += 1) {
-    const selected = [...input.players].sort((left, right) =>
+    const playerPriority = (left: WebLineupPlayer, right: WebLineupPlayer) =>
       compareNumbers(appearances.get(left.playerId) ?? 0, appearances.get(right.playerId) ?? 0) ||
+      compareNumbers(rotationPriority.get(left.playerId) ?? Number.MAX_SAFE_INTEGER, rotationPriority.get(right.playerId) ?? Number.MAX_SAFE_INTEGER) ||
       compareNumbers(input.history[left.playerId]?.minutesPlayed ?? 0, input.history[right.playerId]?.minutesPlayed ?? 0) ||
-      compareNumbers(variationRank(input.seed, `round-${input.halfNumber}-${roundIndex}-${left.playerId}`), variationRank(input.seed, `round-${input.halfNumber}-${roundIndex}-${right.playerId}`)) ||
-      left.name.localeCompare(right.name)
-    ).slice(0, input.positions.length);
+      left.name.localeCompare(right.name);
+    const previousPlayerIds = new Set(previous.values());
+    const benchPlayers = input.players.filter(player => !previousPlayerIds.has(player.playerId)).sort(playerPriority);
+    const returningPlayers = input.players.filter(player => previousPlayerIds.has(player.playerId)).sort(playerPriority);
+    const selected = [...benchPlayers, ...returningPlayers].slice(0, input.positions.length);
     for (const position of input.positions) {
       const lockedCandidates = input.players
         .filter(player => input.lockedPlayerIdsByPosition[position]?.includes(player.playerId))
         .sort((left, right) =>
+          compareNumbers(previousPlayerIds.has(left.playerId) ? 1 : 0, previousPlayerIds.has(right.playerId) ? 1 : 0) ||
           compareNumbers(appearances.get(left.playerId) ?? 0, appearances.get(right.playerId) ?? 0) ||
           compareNumbers(positionCounts.get(`${left.playerId}:${position}`) ?? 0, positionCounts.get(`${right.playerId}:${position}`) ?? 0) ||
-          compareNumbers(variationRank(input.seed, `locked-position-${input.halfNumber}-${roundIndex}-${position}-${left.playerId}`), variationRank(input.seed, `locked-position-${input.halfNumber}-${roundIndex}-${position}-${right.playerId}`)) ||
+          compareNumbers(rotationPriority.get(left.playerId) ?? Number.MAX_SAFE_INTEGER, rotationPriority.get(right.playerId) ?? Number.MAX_SAFE_INTEGER) ||
           left.name.localeCompare(right.name)
         );
       const lockedPlayer = lockedCandidates[0];
@@ -207,9 +257,13 @@ function generateGroupRounds(input: {
       const replaceable = selected
         .filter(player => !Object.values(input.lockedPlayerIdsByPosition).some(ids => ids.includes(player.playerId)))
         .sort((left, right) =>
-          compareNumbers(appearances.get(right.playerId) ?? 0, appearances.get(left.playerId) ?? 0) || right.name.localeCompare(left.name)
+          compareNumbers(previousPlayerIds.has(right.playerId) ? 1 : 0, previousPlayerIds.has(left.playerId) ? 1 : 0) ||
+          compareNumbers(appearances.get(right.playerId) ?? 0, appearances.get(left.playerId) ?? 0) ||
+          compareNumbers(rotationPriority.get(right.playerId) ?? -1, rotationPriority.get(left.playerId) ?? -1)
         )[0] ?? [...selected].sort((left, right) =>
-          compareNumbers(appearances.get(right.playerId) ?? 0, appearances.get(left.playerId) ?? 0) || right.name.localeCompare(left.name)
+          compareNumbers(previousPlayerIds.has(right.playerId) ? 1 : 0, previousPlayerIds.has(left.playerId) ? 1 : 0) ||
+          compareNumbers(appearances.get(right.playerId) ?? 0, appearances.get(left.playerId) ?? 0) ||
+          compareNumbers(rotationPriority.get(right.playerId) ?? -1, rotationPriority.get(left.playerId) ?? -1)
         )[0];
       const replacementIndex = replaceable ? selected.findIndex(player => player.playerId === replaceable.playerId) : -1;
       if (replacementIndex >= 0) selected[replacementIndex] = lockedPlayer;
@@ -224,7 +278,7 @@ function generateGroupRounds(input: {
         .sort((left, right) =>
           compareNumbers(positionCounts.get(`${left.playerId}:${position}`) ?? 0, positionCounts.get(`${right.playerId}:${position}`) ?? 0) ||
           compareNumbers(appearances.get(left.playerId) ?? 0, appearances.get(right.playerId) ?? 0) ||
-          compareNumbers(variationRank(input.seed, `locked-assignment-${input.halfNumber}-${roundIndex}-${position}-${left.playerId}`), variationRank(input.seed, `locked-assignment-${input.halfNumber}-${roundIndex}-${position}-${right.playerId}`)) ||
+          compareNumbers(rotationPriority.get(left.playerId) ?? Number.MAX_SAFE_INTEGER, rotationPriority.get(right.playerId) ?? Number.MAX_SAFE_INTEGER) ||
           left.name.localeCompare(right.name)
         )[0];
       if (lockedPlayer) {
@@ -240,6 +294,19 @@ function generateGroupRounds(input: {
         remaining.delete(priorPlayerId);
       }
     }
+    for (const position of input.positions) {
+      if (current.has(position)) continue;
+      const preferredPlayer = [...remaining.values()]
+        .filter(player => preferredPositionByPlayer.get(player.playerId) === position)
+        .sort((left, right) =>
+          compareNumbers(positionCounts.get(`${left.playerId}:${position}`) ?? 0, positionCounts.get(`${right.playerId}:${position}`) ?? 0) ||
+          compareNumbers(rotationPriority.get(left.playerId) ?? Number.MAX_SAFE_INTEGER, rotationPriority.get(right.playerId) ?? Number.MAX_SAFE_INTEGER) ||
+          left.name.localeCompare(right.name)
+        )[0];
+      if (!preferredPlayer) continue;
+      current.set(position, preferredPlayer.playerId);
+      remaining.delete(preferredPlayer.playerId);
+    }
     for (const position of input.positions.filter(position => !current.has(position))) {
       const player = [...remaining.values()].sort((left, right) =>
         compareNumbers(
@@ -247,7 +314,7 @@ function generateGroupRounds(input: {
           (input.history[right.playerId]?.positionCounts?.[position] ?? 0) + (positionCounts.get(`${right.playerId}:${position}`) ?? 0),
         ) ||
         compareNumbers(appearances.get(left.playerId) ?? 0, appearances.get(right.playerId) ?? 0) ||
-        compareNumbers(variationRank(input.seed, `position-${input.halfNumber}-${roundIndex}-${position}-${left.playerId}`), variationRank(input.seed, `position-${input.halfNumber}-${roundIndex}-${position}-${right.playerId}`)) ||
+        compareNumbers(rotationPriority.get(left.playerId) ?? Number.MAX_SAFE_INTEGER, rotationPriority.get(right.playerId) ?? Number.MAX_SAFE_INTEGER) ||
         left.name.localeCompare(right.name)
       )[0];
       if (!player) continue;

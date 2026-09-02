@@ -287,8 +287,37 @@ class LineupGeneratorTest {
     }
 
     @Test
-    fun keeps_returning_players_in_same_position_between_rounds() {
-        val players = (1..8).map { index ->
+    fun alternates_full_field_cohorts_and_returns_players_to_their_same_position() {
+        val players = (1..13).map { index ->
+            LineupPlayer(
+                id = "p$index",
+                name = "Player $index",
+                preferredKeeper = index == 1,
+            )
+        }
+
+        val result = generator.generate(GameTemplateConfig.defaultU9(), players, emptyMap())
+
+        (1..2).forEach { half ->
+            val fieldAssignments = result.assignments.filter {
+                it.halfNumber == half && it.position != FieldPosition.GOALIE
+            }
+            fieldAssignments.groupBy { it.playerId }.values.forEach { playerAssignments ->
+                assertEquals(1, playerAssignments.map { it.position }.distinct().size)
+            }
+            (2..GameTemplateConfig.defaultU9().roundsPerHalf).forEach { round ->
+                val previousPlayers = fieldAssignments.filter { it.roundIndex == round - 1 }.map { it.playerId }.toSet()
+                val currentPlayers = fieldAssignments.filter { it.roundIndex == round }.map { it.playerId }.toSet()
+                assertTrue(previousPlayers.intersect(currentPlayers).isEmpty())
+            }
+            val appearanceCounts = fieldAssignments.groupingBy { it.playerId }.eachCount().values
+            assertEquals(appearanceCounts.minOrNull(), appearanceCounts.maxOrNull())
+        }
+    }
+
+    @Test
+    fun keeps_playing_time_balanced_when_groups_cannot_form_perfect_cohorts() {
+        val players = (1..11).map { index ->
             LineupPlayer(
                 id = "p$index",
                 name = "Player $index",
@@ -300,22 +329,73 @@ class LineupGeneratorTest {
 
         (1..2).forEach { half ->
             listOf(PositionGroup.DEFENSE, PositionGroup.LR_MID, PositionGroup.CM_STRIKER).forEach { group ->
-                val groupAssignments = result.assignments
+                val appearanceCounts = result.assignments
                     .filter { it.halfNumber == half && it.positionGroup == group }
+                    .groupingBy { it.playerId }
+                    .eachCount()
+                    .values
+                assertTrue(appearanceCounts.maxOrNull()!! - appearanceCounts.minOrNull()!! <= 1)
+            }
+        }
+    }
 
+    @Test
+    fun rotates_the_maximum_possible_players_in_every_position_group_each_round() {
+        val players = (1..10).map { index ->
+            LineupPlayer(
+                id = "p$index",
+                name = "Player $index",
+                preferredKeeper = index == 1,
+            )
+        }
+        val template = GameTemplateConfig.defaultU9().copy(
+            formationType = FormationType.ATTACK_BACK_THREE,
+            positions = GameTemplateConfig.ATTACK_BACK_THREE_POSITIONS,
+        )
+
+        val result = generator.generate(template, players, emptyMap())
+
+        (1..2).forEach { half ->
+            listOf(PositionGroup.ATTACK, PositionGroup.DEFENSE).forEach { group ->
+                val groupAssignments = result.assignments.filter {
+                    it.halfNumber == half && it.positionGroup == group
+                }
+                val groupPlayerCount = groupAssignments.map { it.playerId }.distinct().size
+                val positionCount = template.formation.positionsByGroup.getValue(group).size
+                val unavoidableRepeats = (positionCount * 2 - groupPlayerCount).coerceAtLeast(0)
+                (2..template.roundsPerHalf).forEach { round ->
+                    val previousAssignments = groupAssignments.filter { it.roundIndex == round - 1 }.associateBy { it.playerId }
+                    val currentAssignments = groupAssignments.filter { it.roundIndex == round }.associateBy { it.playerId }
+                    val stayingPlayerIds = previousAssignments.keys.intersect(currentAssignments.keys)
+                    assertEquals(unavoidableRepeats, stayingPlayerIds.size)
+                    stayingPlayerIds.forEach { playerId ->
+                        assertEquals(previousAssignments.getValue(playerId).position, currentAssignments.getValue(playerId).position)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun keeps_the_unavoidable_holdover_in_place_for_three_player_classic_groups() {
+        val players = (1..10).map { index ->
+            LineupPlayer(
+                id = "p$index",
+                name = "Player $index",
+                preferredKeeper = index == 1,
+            )
+        }
+
+        val result = generator.generate(GameTemplateConfig.defaultU9(), players, emptyMap())
+
+        (1..2).forEach { half ->
+            listOf(PositionGroup.DEFENSE, PositionGroup.LR_MID, PositionGroup.CM_STRIKER).forEach { group ->
+                val assignments = result.assignments.filter { it.halfNumber == half && it.positionGroup == group }
                 (2..GameTemplateConfig.defaultU9().roundsPerHalf).forEach { round ->
-                    val previousRound = groupAssignments
-                        .filter { it.roundIndex == round - 1 }
-                        .associateBy { it.playerId }
-                    val currentRound = groupAssignments
-                        .filter { it.roundIndex == round }
-                        .associateBy { it.playerId }
-
-                    previousRound.keys
-                        .intersect(currentRound.keys)
-                        .forEach { playerId ->
-                            assertEquals(previousRound.getValue(playerId).position, currentRound.getValue(playerId).position)
-                        }
+                    val previous = assignments.filter { it.roundIndex == round - 1 }.associateBy { it.playerId }
+                    val current = assignments.filter { it.roundIndex == round }.associateBy { it.playerId }
+                    val stayingPlayerId = previous.keys.intersect(current.keys).single()
+                    assertEquals(previous.getValue(stayingPlayerId).position, current.getValue(stayingPlayerId).position)
                 }
             }
         }
