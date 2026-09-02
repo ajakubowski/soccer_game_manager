@@ -57,4 +57,21 @@ describe("lineup regeneration API", () => {
       lineupName: "Game-day final",
     });
   });
+
+  it("deletes a game through the aggregate endpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      teamRevision: 15,
+      acceptedMutationIds: ["delete-1"],
+      conflicts: [],
+      changes: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await cloudApi.deleteGame("team-1", "game-1", 7, "delete-1");
+
+    const [path, init] = fetchMock.mock.calls[0];
+    expect(path).toBe("/api/teams/team-1/games/game-1");
+    expect(init?.method).toBe("DELETE");
+    expect(JSON.parse(String(init?.body))).toEqual({ expectedGameVersion: 7, mutationId: "delete-1" });
+  });
 });

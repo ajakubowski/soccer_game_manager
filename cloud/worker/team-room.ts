@@ -356,6 +356,83 @@ export class TeamRoom extends DurableObject<Env> {
     return response;
   }
 
+  async deleteGame(
+    gameId: string,
+    expectedGameVersion: number,
+    mutationId: string,
+    actor: Actor,
+  ): Promise<MutationResult> {
+    if (actor.role === "VIEWER") throw new Error("Viewer access is read-only");
+    const cached = this.ctx.storage.sql.exec<{ result_json: string }>(
+      "SELECT result_json FROM mutation_results WHERE mutation_id = ?",
+      mutationId,
+    ).toArray()[0];
+    if (cached) return JSON.parse(cached.result_json) as MutationResult;
+
+    const game = this.entity("game", gameId);
+    const actualVersion = game?.version ?? 0;
+    if (!game || game.deletedAt || actualVersion !== expectedGameVersion) {
+      const conflict: MutationResult["conflicts"][number] = {
+        mutationId,
+        entityType: "game",
+        entityId: gameId,
+        reason: "VERSION_MISMATCH",
+        expectedVersion: expectedGameVersion,
+        actualVersion,
+        serverEntity: game,
+      };
+      const response = { teamRevision: this.currentRevision(), acceptedMutationIds: [], conflicts: [conflict], changes: [] };
+      this.storeMutationResult(mutationId, response);
+      return response;
+    }
+
+    let response!: MutationResult;
+    this.ctx.storage.transactionSync(() => {
+      const related = this.ctx.storage.sql.exec<StoredEntityRow>(
+        `SELECT * FROM entities
+         WHERE entity_type IN ('availability', 'assignment', 'goal') AND deleted_at IS NULL`,
+      ).toArray().map(mapEntity).filter(entity => entity.payload?.gameId === gameId);
+      const changes: CloudEntity[] = [];
+      for (const entity of related) {
+        changes.push(this.applyMutationInternal({
+          mutationId: `${mutationId}:delete:${entity.entityType}:${entity.entityId}`,
+          deviceId: actor.deviceId ?? "web",
+          teamId: actor.teamId ?? "",
+          entityType: entity.entityType,
+          entityId: entity.entityId,
+          operation: "DELETE_ENTITY",
+          expectedVersion: entity.version,
+          payload: null,
+          createdAt: Date.now(),
+          cell: entity.entityType === "assignment" ? assignmentCell("assignment", entity.payload) ?? undefined : undefined,
+        }, actor));
+      }
+      changes.push(this.applyMutationInternal({
+        mutationId: `${mutationId}:delete:game:${gameId}`,
+        deviceId: actor.deviceId ?? "web",
+        teamId: actor.teamId ?? "",
+        entityType: "game",
+        entityId: gameId,
+        operation: "DELETE_ENTITY",
+        expectedVersion: game.version,
+        payload: null,
+        createdAt: Date.now(),
+      }, actor));
+      this.ctx.storage.sql.exec("DELETE FROM published_lineups WHERE game_id = ?", gameId);
+      this.ctx.storage.sql.exec("DELETE FROM controller_leases WHERE game_id = ?", gameId);
+      this.ctx.storage.sql.exec("DELETE FROM lineup_cell_versions WHERE cell_key LIKE ?", `${gameId}:%`);
+      response = {
+        teamRevision: this.currentRevision(),
+        acceptedMutationIds: [mutationId],
+        conflicts: [],
+        changes,
+      };
+      this.storeMutationResult(mutationId, response);
+    });
+    this.broadcast({ type: "changes", teamRevision: response.teamRevision, changes: response.changes });
+    return response;
+  }
+
   async publishLineup(
     gameId: string,
     expectedTeamRevision: number,

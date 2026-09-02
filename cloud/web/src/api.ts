@@ -58,6 +58,11 @@ export const cloudApi = {
     method: "POST",
     body: JSON.stringify({ expectedGameVersion, game, assignments, mutationId }),
   }),
+  deleteGame: (teamId: string, gameId: string, expectedGameVersion: number, mutationId: string) =>
+    api<MutationResult>(`/api/teams/${teamId}/games/${gameId}`, {
+      method: "DELETE",
+      body: JSON.stringify({ expectedGameVersion, mutationId }),
+    }),
   pairing: (teamId: string) => api<{ code: string; expiresAt: number }>(`/api/teams/${teamId}/pairings`, {
     method: "POST",
     body: JSON.stringify({}),

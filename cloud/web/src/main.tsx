@@ -3,9 +3,10 @@ import { createRoot } from "react-dom/client";
 import type { AuthSessionResponse, AuthUser, CloudEntity, MemberRole, MutationCommand, MutationResult, PresenceMember, SyncConflict, TeamSnapshot, TeamSummary } from "../../shared/contracts";
 import { FORMATIONS, generateWebLineup, type WebFormationType, type WebLineupPlayer, type WebManualLock, type WebPlayerHistory } from "../../shared/lineup-generator";
 import { api, cloudApi, collaborationSocket } from "./api";
+import { buildPrintReportModel, PrintableGameReport } from "./print-report";
 import "./styles.css";
 
-type Tab = "Overview" | "Team & Roster" | "Planner" | "Live" | "History & Stats" | "Report" | "Access";
+type Tab = "Overview" | "Roster & Schedule" | "Planner" | "Live" | "History & Stats" | "Report" | "Access";
 type Json = Record<string, unknown>;
 
 function App() {
@@ -37,6 +38,7 @@ function TeamApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   const [message, setMessage] = useState("");
   const [conflict, setConflict] = useState<{ conflict: SyncConflict; command: MutationCommand } | null>(null);
   const [creatingTeam, setCreatingTeam] = useState(false);
+  const [reportGameId, setReportGameId] = useState("");
 
   const refreshTeams = async () => {
     const result = await cloudApi.teams();
@@ -101,18 +103,18 @@ function TeamApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
       </section>
 
       <nav className="tabs" aria-label="Team sections">
-        {(["Overview", "Team & Roster", "Planner", "Live", "History & Stats", "Report", "Access"] as Tab[]).map(item => (
+        {(["Overview", "Roster & Schedule", "Planner", "Live", "History & Stats", "Report", "Access"] as Tab[]).map(item => (
           <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}</button>
         ))}
       </nav>
 
       <main>
         {snapshot && tab === "Overview" && <Overview snapshot={snapshot} onNavigate={setTab} />}
-        {snapshot && tab === "Team & Roster" && <TeamRoster teamId={teamId!} snapshot={snapshot} onMutate={mutate} />}
-        {snapshot && tab === "Planner" && <Planner teamId={teamId!} snapshot={snapshot} onMutate={mutate} onRefresh={refresh} onMessage={setMessage} />}
+        {snapshot && tab === "Roster & Schedule" && <TeamRoster teamId={teamId!} snapshot={snapshot} onMutate={mutate} onRefresh={refresh} onMessage={setMessage} />}
+        {snapshot && tab === "Planner" && <Planner teamId={teamId!} snapshot={snapshot} onMutate={mutate} onRefresh={refresh} onMessage={setMessage} onOpenPrint={gameId => { setReportGameId(gameId); setTab("Report"); }} />}
         {snapshot && tab === "Live" && <LiveObserver snapshot={snapshot} />}
         {snapshot && tab === "History & Stats" && <History snapshot={snapshot} />}
-        {snapshot && tab === "Report" && <Report snapshot={snapshot} />}
+        {snapshot && tab === "Report" && <Report snapshot={snapshot} teamName={activeTeam?.name ?? "Team"} initialGameId={reportGameId} />}
         {teamId && tab === "Access" && <AccessPanel teamId={teamId} onMessage={setMessage} />}
       </main>
       {conflict && <ConflictDialog
@@ -140,7 +142,7 @@ function TeamApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
           await refreshTeams();
           setTeamId(id);
           setSnapshot(await cloudApi.snapshot(id));
-          setTab("Team & Roster");
+          setTab("Roster & Schedule");
           setCreatingTeam(false);
         }}
       />}
@@ -148,10 +150,12 @@ function TeamApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   );
 }
 
-function TeamRoster({ teamId, snapshot, onMutate }: {
+function TeamRoster({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
   teamId: string;
   snapshot: TeamSnapshot;
   onMutate: (commands: MutationCommand[]) => Promise<MutationResult | undefined>;
+  onRefresh: () => Promise<void>;
+  onMessage: (message: string) => void;
 }) {
   const season = entities(snapshot, "season")[0];
   const players = entities(snapshot, "player").sort((a, b) => stringValue(a.payload?.name).localeCompare(stringValue(b.payload?.name)));
@@ -161,6 +165,7 @@ function TeamRoster({ teamId, snapshot, onMutate }: {
   const [playerNotes, setPlayerNotes] = useState("");
   const [keeperEligible, setKeeperEligible] = useState(true);
   const [editingPlayer, setEditingPlayer] = useState<CloudEntity | null>(null);
+  const [editingGame, setEditingGame] = useState<CloudEntity | null>(null);
   const [opponent, setOpponent] = useState("");
   const [locationName, setLocationName] = useState("");
   const [scheduledAt, setScheduledAt] = useState(new Date().toISOString().slice(0, 16));
@@ -199,6 +204,26 @@ function TeamRoster({ teamId, snapshot, onMutate }: {
     })]);
     setOpponent(""); setLocationName("");
   };
+  const deleteGame = async (game: CloudEntity) => {
+    const opponentName = stringValue(game.payload?.opponent) || "this game";
+    const relatedCount = snapshot.entities.filter(entity => !entity.deletedAt &&
+      ["availability", "assignment", "goal"].includes(entity.entityType) && stringValue(entity.payload?.gameId) === game.entityId).length;
+    const publishedCount = snapshot.publishedLineups.filter(lineup => lineup.gameId === game.entityId).length;
+    const details = [relatedCount ? `${relatedCount} related lineup/event records` : "its associated records", publishedCount ? `${publishedCount} published lineup version${publishedCount === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
+    if (!window.confirm(`Delete the game against ${opponentName}? This permanently removes the game, ${details}, and updates shared analytics on every synced device. This cannot be undone.`)) return;
+    try {
+      const result = await cloudApi.deleteGame(teamId, game.entityId, game.version, crypto.randomUUID());
+      if (result.conflicts.length) {
+        await onRefresh();
+        onMessage("The game changed on another device before it could be deleted. Review the refreshed schedule and try again.");
+        return;
+      }
+      await onRefresh();
+      onMessage(`Game against ${opponentName} deleted.`);
+    } catch (error) {
+      onMessage(`Game was not deleted: ${readableError(error)}`);
+    }
+  };
 
   if (!season) return <Empty text="Preparing this cloud team for web roster management. Refresh once if this message remains visible." />;
   return <div className="two-column roster-layout">
@@ -225,9 +250,14 @@ function TeamRoster({ teamId, snapshot, onMutate }: {
         {!players.length && <Empty text="Add your first player above. New players are keeper eligible by default." />}
       </div>
     </section>
-    <section className="panel"><span className="eyebrow">Schedule</span><h2>Games</h2>
+    <section className="panel"><span className="eyebrow">Shared schedule</span><h2>Games</h2>
       <div className="stacked-form"><input placeholder="Opponent" value={opponent} onChange={event => setOpponent(event.target.value)} /><input placeholder="Location" value={locationName} onChange={event => setLocationName(event.target.value)} /><input type="datetime-local" value={scheduledAt} onChange={event => setScheduledAt(event.target.value)} /><button className="primary" onClick={() => void addGame()}>Create game</button></div>
-      {games.map(game => <article className="history-row" key={game.entityId}><div><strong>vs {stringValue(game.payload?.opponent)}</strong><span className="subline">{new Date(numberValue(game.payload?.scheduledAt)).toLocaleString()}</span></div><span>{stringValue(game.payload?.status)}</span></article>)}
+      <div className="schedule-list">{games.map(game => <article className="schedule-game" key={game.entityId}>
+        <div className="schedule-game-copy"><strong>vs {stringValue(game.payload?.opponent)}</strong><span>{new Date(numberValue(game.payload?.scheduledAt)).toLocaleString()}</span><span>{stringValue(game.payload?.location) || "Location TBD"}</span></div>
+        <span className={`game-status ${stringValue(game.payload?.status).toLowerCase()}`}>{label(stringValue(game.payload?.status) || "PLANNED")}</span>
+        <div className="row-actions"><button onClick={() => setEditingGame(game)}>Edit</button><button className="danger-text" onClick={() => void deleteGame(game)}>Delete</button></div>
+      </article>)}</div>
+      {!games.length && <Empty text="Create the first game above. You can edit or delete it later." />}
     </section>
     {editingPlayer && <PlayerEditor
       player={editingPlayer}
@@ -235,6 +265,14 @@ function TeamRoster({ teamId, snapshot, onMutate }: {
       onSave={async payload => {
         await onMutate([mutation("player", editingPlayer.entityId, editingPlayer.version, payload)]);
         setEditingPlayer(null);
+      }}
+    />}
+    {editingGame && <GameEditor
+      game={editingGame}
+      onCancel={() => setEditingGame(null)}
+      onSave={async payload => {
+        await onMutate([mutation("game", editingGame.entityId, editingGame.version, payload)]);
+        setEditingGame(null);
       }}
     />}
   </div>;
@@ -302,6 +340,33 @@ function PlayerEditor({ player, onCancel, onSave }: { player: CloudEntity; onCan
   </div>;
 }
 
+function GameEditor({ game, onCancel, onSave }: { game: CloudEntity; onCancel: () => void; onSave: (payload: Json) => Promise<void> }) {
+  const [opponent, setOpponent] = useState(stringValue(game.payload?.opponent));
+  const [locationName, setLocationName] = useState(stringValue(game.payload?.location));
+  const [scheduledAt, setScheduledAt] = useState(formatDateTimeLocal(numberValue(game.payload?.scheduledAt)));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  return <div className="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="edit-game-title">
+    <section className="dialog-card"><span className="eyebrow">Schedule details</span><h2 id="edit-game-title">Edit game</h2>
+      <p className="muted">Updates are shared with the web planner and paired Android devices.</p>
+      <div className="stacked-form">
+        <label>Opponent<input autoFocus value={opponent} onChange={event => setOpponent(event.target.value)} /></label>
+        <label>Location<input value={locationName} onChange={event => setLocationName(event.target.value)} placeholder="Location TBD" /></label>
+        <label>Date and time<input type="datetime-local" value={scheduledAt} onChange={event => setScheduledAt(event.target.value)} /></label>
+      </div>
+      {error && <p className="auth-error">{error}</p>}
+      <div className="button-row"><button disabled={saving} onClick={onCancel}>Cancel</button><button className="primary" disabled={saving || !opponent.trim() || !scheduledAt} onClick={async () => {
+        setSaving(true); setError("");
+        try {
+          await onSave({ ...(game.payload ?? {}), opponent: opponent.trim(), location: locationName.trim(), scheduledAt: new Date(scheduledAt).getTime() });
+        } catch (caught) {
+          setError(readableError(caught)); setSaving(false);
+        }
+      }}>{saving ? "Saving..." : "Save game"}</button></div>
+    </section>
+  </div>;
+}
+
 function Overview({ snapshot, onNavigate }: { snapshot: TeamSnapshot; onNavigate: (tab: Tab) => void }) {
   const players = entities(snapshot, "player");
   const games = entities(snapshot, "game").sort((a, b) => numberValue(b.payload?.scheduledAt) - numberValue(a.payload?.scheduledAt));
@@ -310,7 +375,7 @@ function Overview({ snapshot, onNavigate }: { snapshot: TeamSnapshot; onNavigate
     <section className="hero-card">
       <span className="eyebrow">Next match</span>
       <h2>{next ? `vs ${stringValue(next.payload?.opponent)}` : "No game scheduled"}</h2>
-      <p>{next ? new Date(numberValue(next.payload?.scheduledAt)).toLocaleString() : "Add players and create a game from Team & Roster."}</p>
+      <p>{next ? new Date(numberValue(next.payload?.scheduledAt)).toLocaleString() : "Add players and create a game from Roster & Schedule."}</p>
       <div className="button-row"><button className="primary" onClick={() => onNavigate("Planner")}>Open planner</button><button onClick={() => onNavigate("Live")}>Live observer</button></div>
     </section>
     <Stat label="Players" value={players.length} />
@@ -320,12 +385,13 @@ function Overview({ snapshot, onNavigate }: { snapshot: TeamSnapshot; onNavigate
   </div>;
 }
 
-function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
+function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage, onOpenPrint }: {
   teamId: string;
   snapshot: TeamSnapshot;
   onMutate: (commands: MutationCommand[]) => Promise<MutationResult | undefined>;
   onRefresh: () => Promise<void>;
   onMessage: (message: string) => void;
+  onOpenPrint: (gameId: string) => void;
 }) {
   const players = entities(snapshot, "player").filter(player => player.payload?.active !== false)
     .sort((left, right) => stringValue(left.payload?.name).localeCompare(stringValue(right.payload?.name)));
@@ -603,7 +669,7 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
     }
   };
 
-  if (!games.length) return <Empty text="Create a game in Team & Roster before starting a lineup." />;
+  if (!games.length) return <Empty text="Create a game in Roster & Schedule before starting a lineup." />;
   const firstHalfAvailable = players.filter(player => draftAvailability[player.entityId]?.first !== false).length;
   const secondHalfAvailable = players.filter(player => draftAvailability[player.entityId]?.second !== false).length;
   const keeperInsight = keeperPlanningInsight(snapshot, gameId, players);
@@ -616,6 +682,7 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
         <select value={gameId} onChange={event => setGameId(event.target.value)}>{games.map(item => <option key={item.entityId} value={item.entityId}>{stringValue(item.payload?.opponent)}</option>)}</select>
         <input aria-label="Lineup name" placeholder="Lineup name (optional)" value={lineupName} onChange={event => setLineupName(event.target.value)} />
         {publishNeedsReview && <button onClick={() => void publishLatestCloudDraft()}>Publish latest cloud draft</button>}
+        <button disabled={!assignments.length} onClick={() => onOpenPrint(gameId)}>Print / PDF</button>
         <button className="primary" disabled={!assignments.length || !editable} onClick={() => void publish()}>Publish lineup</button>
       </div>
     </div>
@@ -658,7 +725,7 @@ function Planner({ teamId, snapshot, onMutate, onRefresh, onMessage }: {
 
     {(firstHalfAvailable < 7 || secondHalfAvailable < 7) && <p className="planner-warning">Each half needs at least seven available players. Current availability: Half 1 {firstHalfAvailable}, Half 2 {secondHalfAvailable}.</p>}
     {!assignments.length ? <div className="generate-bar"><div><strong>Ready to build both halves?</strong><span>The app will honor the locks, create {plannedRounds} rotations per half, and keep players in their group within each half.</span></div><button className="primary" disabled={!editable || players.length < 7 || firstHalfAvailable < 7 || secondHalfAvailable < 7} onClick={() => void generate()}>Generate lineup draft</button></div> : <>
-      <div className="planner-action-bar"><div><strong>{plannedRounds} rotations · {rotationMinutes} minute target</strong><span>{publishNeedsReview ? "The cloud draft refreshed. Review it before choosing Publish latest cloud draft." : stringValue(game?.payload?.plannerNotes) || "Lineup checks are clear."}</span></div><div className="button-row"><button disabled={!editable} onClick={() => void generate(true)}>Regenerate fresh lineup</button>{publishNeedsReview && <button onClick={() => void publishLatestCloudDraft()}>Publish latest cloud draft</button>}<button className="primary" disabled={!editable} onClick={() => void publish()}>Publish lineup</button></div></div>
+      <div className="planner-action-bar"><div><strong>{plannedRounds} rotations · {rotationMinutes} minute target</strong><span>{publishNeedsReview ? "The cloud draft refreshed. Review it before choosing Publish latest cloud draft." : stringValue(game?.payload?.plannerNotes) || "Lineup checks are clear."}</span></div><div className="button-row"><button disabled={!editable} onClick={() => void generate(true)}>Regenerate fresh lineup</button>{publishNeedsReview && <button onClick={() => void publishLatestCloudDraft()}>Publish latest cloud draft</button>}<button onClick={() => onOpenPrint(gameId)}>Print / PDF</button><button className="primary" disabled={!editable} onClick={() => void publish()}>Publish lineup</button></div></div>
       <nav className="half-switcher" aria-label="Choose lineup half">{([1, 2] as const).map(half => <button key={half} className={activeHalf === half ? "active" : ""} onClick={() => { setActiveHalf(half); setArmedPlayerId(""); }}><span>Half {half}</span><small>{half === 1 ? firstHalfAvailable : secondHalfAvailable} available · R{selectedRounds[half]}</small></button>)}</nav>
       <LineupHalfBoard
         half={activeHalf}
@@ -972,10 +1039,30 @@ function History({ snapshot }: { snapshot: TeamSnapshot }) {
   </div>;
 }
 
-function Report({ snapshot }: { snapshot: TeamSnapshot }) {
-  return <section className="panel"><div className="panel-heading"><div><span className="eyebrow">Published history</span><h2>Lineup reports</h2></div><button onClick={() => window.print()}>Print</button></div>
-    {snapshot.publishedLineups.length ? snapshot.publishedLineups.map(report => <article className="report-row" key={`${report.gameId}:${report.publishedVersion}`}><strong>{report.lineupName || `Lineup v${report.publishedVersion}`} · Game {report.gameId.slice(0, 8)}</strong><span>v{report.publishedVersion} · {report.publishedByUser} · {report.publishedFromDeviceName} · {new Date(report.publishedAt).toLocaleString()}</span></article>) : <Empty text="Published lineups will appear here." />}
-  </section>;
+function Report({ snapshot, teamName, initialGameId }: { snapshot: TeamSnapshot; teamName: string; initialGameId: string }) {
+  const games = entities(snapshot, "game").sort((left, right) => numberValue(right.payload?.scheduledAt) - numberValue(left.payload?.scheduledAt));
+  const [gameId, setGameId] = useState(initialGameId || games[0]?.entityId || "");
+  useEffect(() => {
+    if (initialGameId && games.some(game => game.entityId === initialGameId)) setGameId(initialGameId);
+  }, [initialGameId]);
+  useEffect(() => {
+    if (!games.some(game => game.entityId === gameId)) setGameId(games[0]?.entityId ?? "");
+  }, [games.length, gameId]);
+  const model = buildPrintReportModel(snapshot, teamName, gameId);
+
+  if (!games.length) return <Empty text="Create a game before opening a printable lineup report." />;
+  return <div className="report-page">
+    <section className="panel print-report-controls">
+      <div className="panel-heading"><div><span className="eyebrow">Match plan and report</span><h2>Print lineup</h2><p className="muted">The compact landscape sheet matches the Android report layout and can be printed or saved as a PDF.</p></div><div className="button-row">
+        <select aria-label="Game to print" value={gameId} onChange={event => setGameId(event.target.value)}>{games.map(game => <option key={game.entityId} value={game.entityId}>{new Date(numberValue(game.payload?.scheduledAt)).toLocaleDateString()} · {stringValue(game.payload?.opponent)}</option>)}</select>
+        <button className="primary" disabled={!model} onClick={() => window.print()}>Print / Save PDF</button>
+      </div></div>
+    </section>
+    {model ? <PrintableGameReport model={model} /> : <Empty text="This game is not available for printing." />}
+    <section className="panel published-history"><span className="eyebrow">Published history</span><h2>Lineup versions</h2>
+      {snapshot.publishedLineups.length ? snapshot.publishedLineups.map(report => <article className="report-row" key={`${report.gameId}:${report.publishedVersion}`}><strong>{report.lineupName || `Lineup v${report.publishedVersion}`} · Game {report.gameId.slice(0, 8)}</strong><span>v{report.publishedVersion} · {report.publishedByUser} · {report.publishedFromDeviceName} · {new Date(report.publishedAt).toLocaleString()}</span></article>) : <Empty text="Published lineups will appear here." />}
+    </section>
+  </div>;
 }
 
 function AccessPanel({ teamId, onMessage }: { teamId: string; onMessage: (message: string) => void }) {
@@ -1060,6 +1147,12 @@ function AuthScreen({ registrationOpen, onAuthenticated }: { registrationOpen: b
 function entities(snapshot: TeamSnapshot, type: string) { return snapshot.entities.filter(entity => entity.entityType === type && !entity.deletedAt); }
 function stringValue(value: unknown) { return typeof value === "string" ? value : ""; }
 function numberValue(value: unknown) { return typeof value === "number" ? value : 0; }
+function formatDateTimeLocal(timestamp: number) {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
 function positiveNumber(value: unknown, fallback: number) {
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;

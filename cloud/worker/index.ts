@@ -170,6 +170,16 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
       teamActor,
     ));
   }
+  const deleteGameMatch = action.match(/^games\/([^/]+)$/);
+  if (deleteGameMatch && request.method === "DELETE") {
+    const body = await readJson<{ expectedGameVersion: number; mutationId: string }>(request);
+    return json(await room.deleteGame(
+      decodeURIComponent(deleteGameMatch[1]),
+      body.expectedGameVersion,
+      body.mutationId,
+      teamActor,
+    ));
+  }
   const controllerMatch = action.match(/^games\/([^/]+)\/controller\/claim$/);
   if (controllerMatch && request.method === "POST") {
     const body = await readJson<{ deviceId?: string; holderName?: string; durationHours?: number }>(request);
